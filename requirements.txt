@@ -3,3 +3,5 @@ opencv-python
 matplotlib
 supabase
 python-dotenv
+ultralytics
+numpy
