@@ -14,7 +14,7 @@ import os
 import sys
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
-from database_setup import MusicianDatabase
+from src.database.setup import MusicianDatabase
 
 def extract_audio_with_ffmpeg(video_path, output_path, duration=90, start_time=0):
     """Extract audio using ffmpeg directly"""

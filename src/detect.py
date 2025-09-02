@@ -1,6 +1,6 @@
 import mediapipe as mp
-# from mediapipe.tasks import python
-# from mediapipe.tasks.python import vision
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import cv2 
 import numpy as np
 from ultralytics import YOLO
@@ -11,8 +11,10 @@ import os
 import json
 from datetime import datetime
 import torch
+import yaml
 # from fer import FER
-from database_setup import MusicianDatabase
+from database.setup import MusicianDatabase
+from models.emotion import DeepFaceDetector, GhostFaceNetDetector, FERDetector
 
 def convert_landmarks_to_dict(landmarks):
     """
@@ -65,18 +67,45 @@ def convert_hand_landmarks_to_dict(multi_hand_landmarks):
 
 def convert_pose_landmarks_to_dict(pose_results):
     """
-    Convert MediaPipe pose landmarks to database format
+    Convert pose landmarks to database format (supports both YOLO and MediaPipe)
     
     Args:
-        pose_results: MediaPipe pose results
+        pose_results: YOLO results (list) or MediaPipe pose results (object)
     
     Returns:
         List of pose landmark dictionaries
     """
-    if not pose_results or not pose_results.pose_landmarks:
-        return None
+    # Handle YOLO results (list format)
+    if isinstance(pose_results, list):
+        if not pose_results or pose_results[0].keypoints is None:
+            return None
+        
+        # Convert YOLO keypoints to our format
+        keypoints = pose_results[0].keypoints.xy.cpu().numpy()
+        if len(keypoints) == 0:
+            return None
+            
+        # Get the first person's keypoints
+        person_keypoints = keypoints[0]
+        landmark_data = []
+        
+        for i, (x, y) in enumerate(person_keypoints):
+            # YOLO provides x,y coordinates, we add z=0 and confidence=1 for consistency
+            landmark_data.append({
+                "x": float(x) if x > 0 else 0.0,
+                "y": float(y) if y > 0 else 0.0, 
+                "z": 0.0,  # YOLO doesn't provide z-coordinate
+                "confidence": 1.0 if x > 0 and y > 0 else 0.0  # Valid if both x,y > 0
+            })
+        
+        return landmark_data
     
-    return convert_landmarks_to_dict(pose_results.pose_landmarks)
+    # Handle MediaPipe results (object format)
+    else:
+        if not pose_results or not pose_results.pose_landmarks:
+            return None
+        
+        return convert_landmarks_to_dict(pose_results.pose_landmarks)
 
 def get_hand_landmarks(hand_model, img):
     """
@@ -102,6 +131,49 @@ def get_face_landmarks(face_mesh_model, img):
     Detect face landmarks using MediaPipe Face Mesh model
     """
     return face_mesh_model.process(img).multi_face_landmarks
+
+def extract_face_keypoints_from_yolo(pose_results):
+    """
+    Extract face keypoints from YOLO pose results
+    
+    YOLO pose keypoints include face landmarks:
+    0: nose, 1: left_eye, 2: right_eye, 3: left_ear, 4: right_ear
+    
+    Args:
+        pose_results: YOLO pose detection results
+    
+    Returns:
+        List of face landmarks in MediaPipe format or None
+    """
+    if not pose_results or pose_results[0].keypoints is None:
+        return None
+    
+    keypoints = pose_results[0].keypoints.xy.cpu().numpy()
+    if len(keypoints) == 0:
+        return None
+    
+    # Get the first person's keypoints
+    person_keypoints = keypoints[0]
+    
+    # Face keypoint indices in YOLO COCO format
+    face_indices = [0, 1, 2, 3, 4]  # nose, left_eye, right_eye, left_ear, right_ear
+    
+    face_landmarks = []
+    for idx in face_indices:
+        if idx < len(person_keypoints):
+            x, y = person_keypoints[idx]
+            if x > 0 and y > 0:  # Valid keypoint
+                # Convert to normalized coordinates (similar to MediaPipe format)
+                # Note: This is a simplified conversion - you may need to adjust based on image size
+                face_landmarks.append({
+                    "x": float(x / 640),  # Assuming image width of 640 (adjust as needed)
+                    "y": float(y / 480),  # Assuming image height of 480 (adjust as needed)  
+                    "z": 0.0,
+                    "confidence": 1.0
+                })
+    
+    # Return in a format similar to MediaPipe multi_face_landmarks
+    return [face_landmarks] if face_landmarks else None
 
 def detect_emotions_mediapipe(img, face_mesh_model):
     """
@@ -312,6 +384,73 @@ def draw_mp_face_mesh(img, multi_face_landmarks):
                 mp.solutions.face_mesh.FACEMESH_TESSELATION
             )
 
+def draw_facelandmarker_landmarks(img, detection_result):
+    """
+    Draw face landmarks from FaceLandmarker API on the image
+    
+    Args:
+        img: Input image (BGR format)
+        detection_result: FaceLandmarker detection result
+    """
+    if not detection_result.face_landmarks:
+        return
+    
+    # Get image dimensions
+    image_rows, image_cols, _ = img.shape
+    
+    # Draw landmarks for each detected face
+    for face_landmarks in detection_result.face_landmarks:
+        # Draw landmarks as small circles
+        for landmark in face_landmarks:
+            x = int(landmark.x * image_cols)
+            y = int(landmark.y * image_rows)
+            cv2.circle(img, (x, y), 1, (0, 255, 0), -1)
+
+def draw_yolo_face_keypoints(img, face_landmarks_list):
+    """
+    Draw YOLO face keypoints on the image
+    
+    Args:
+        img: Input image
+        face_landmarks_list: List of face landmark dictionaries from YOLO
+    """
+    if not face_landmarks_list:
+        return
+        
+    # Get image dimensions for coordinate conversion
+    h, w, _ = img.shape
+    
+    # Colors for different face keypoints
+    keypoint_colors = [
+        (0, 255, 0),    # nose - green
+        (255, 0, 0),    # left_eye - blue
+        (255, 0, 0),    # right_eye - blue  
+        (0, 255, 255),  # left_ear - yellow
+        (0, 255, 255)   # right_ear - yellow
+    ]
+    
+    for face_landmarks in face_landmarks_list:
+        for i, landmark in enumerate(face_landmarks):
+            if isinstance(landmark, dict):
+                x = int(landmark['x'] * w)
+                y = int(landmark['y'] * h)
+                color = keypoint_colors[i] if i < len(keypoint_colors) else (255, 255, 255)
+                
+                # Draw keypoint
+                cv2.circle(img, (x, y), 3, color, -1)
+                
+        # Draw connections between face keypoints
+        if len(face_landmarks) >= 5:
+            # Connect eyes to ears
+            for i in range(min(4, len(face_landmarks))):
+                if i + 1 < len(face_landmarks):
+                    landmark1 = face_landmarks[i]
+                    landmark2 = face_landmarks[i + 1]
+                    if isinstance(landmark1, dict) and isinstance(landmark2, dict):
+                        x1, y1 = int(landmark1['x'] * w), int(landmark1['y'] * h)
+                        x2, y2 = int(landmark2['x'] * w), int(landmark2['y'] * h)
+                        cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 1)
+
 def draw_yolo_pose(img, pose_results):
     """
     Draw YOLO pose detection results
@@ -365,12 +504,26 @@ def draw_emotion_results(img, emotions_in_frame):
     
     Args:
         img: Input image
-        emotions_in_frame: List of emotion detection results from FER
+        emotions_in_frame: List of emotion detection results
     """
     for emotion_info in emotions_in_frame:
-        (x, y, w, h) = emotion_info["box"]
-        top_emotion = max(emotion_info["emotions"], key=emotion_info["emotions"].get)
-        emotion_score = emotion_info["emotions"][top_emotion]
+        # Handle different formats (DeepFace uses 'bbox', older code used 'box')
+        if 'bbox' in emotion_info:
+            (x, y, w, h) = emotion_info["bbox"]
+        elif 'box' in emotion_info:
+            (x, y, w, h) = emotion_info["box"]
+        else:
+            continue  # Skip if no bounding box information
+            
+        # Get top emotion and score
+        if 'dominant_emotion' in emotion_info and 'confidence' in emotion_info:
+            # DeepFace format
+            top_emotion = emotion_info['dominant_emotion']
+            emotion_score = emotion_info['confidence']
+        else:
+            # FER format
+            top_emotion = max(emotion_info["emotions"], key=emotion_info["emotions"].get)
+            emotion_score = emotion_info["emotions"][top_emotion]
         
         # Draw green box around the face
         cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
@@ -382,172 +535,223 @@ def draw_emotion_results(img, emotions_in_frame):
 ####### Functions to detect bad gestures #######
 
 #--------- Turtle neck -----------#
+def extract_unified_pose_landmarks(pose_results, img_width, img_height):
+    """
+    Extract pose landmarks in unified format from both YOLO and MediaPipe results
+    Returns: dict with landmark positions as pixel coordinates or None if no valid pose
+    """
+    # Handle YOLO results (list format)
+    if isinstance(pose_results, list) and pose_results and pose_results[0].keypoints is not None:
+        keypoints = pose_results[0].keypoints.xy.cpu().numpy()
+        if len(keypoints) == 0:
+            return None
+            
+        person_keypoints = keypoints[0]
+        # YOLO COCO keypoint mapping: 0=nose, 3=left_ear, 4=right_ear, 5=left_shoulder, 6=right_shoulder, 11=left_hip, 12=right_hip
+        if len(person_keypoints) >= 13:
+            return {
+                'nose': np.array([person_keypoints[0][0], person_keypoints[0][1]]),
+                'left_ear': np.array([person_keypoints[3][0], person_keypoints[3][1]]),
+                'right_ear': np.array([person_keypoints[4][0], person_keypoints[4][1]]),
+                'left_shoulder': np.array([person_keypoints[5][0], person_keypoints[5][1]]),
+                'right_shoulder': np.array([person_keypoints[6][0], person_keypoints[6][1]]),
+                'left_hip': np.array([person_keypoints[11][0], person_keypoints[11][1]]),
+                'right_hip': np.array([person_keypoints[12][0], person_keypoints[12][1]])
+            }
+    
+    # Handle MediaPipe results (object format)
+    elif pose_results and hasattr(pose_results, 'pose_landmarks') and pose_results.pose_landmarks:
+        landmarks = pose_results.pose_landmarks.landmark
+        return {
+            'nose': np.array([landmarks[0].x * img_width, landmarks[0].y * img_height]),
+            'left_ear': np.array([landmarks[7].x * img_width, landmarks[7].y * img_height]),
+            'right_ear': np.array([landmarks[8].x * img_width, landmarks[8].y * img_height]),
+            'left_shoulder': np.array([landmarks[11].x * img_width, landmarks[11].y * img_height]),
+            'right_shoulder': np.array([landmarks[12].x * img_width, landmarks[12].y * img_height]),
+            'left_hip': np.array([landmarks[23].x * img_width, landmarks[23].y * img_height]),
+            'right_hip': np.array([landmarks[24].x * img_width, landmarks[24].y * img_height])
+        }
+    
+    return None
+
 def turtle_neck(img, pose_results):
     """
-    Detect turtle neck posture using MediaPipe pose landmarks
+    Detect turtle neck posture using pose landmarks (supports both YOLO and MediaPipe)
     """
     detected = False
+    h, w, _ = img.shape
     
-    if pose_results and pose_results.pose_landmarks:
-        landmarks = pose_results.pose_landmarks.landmark
-        h, w, _ = img.shape
+    # Extract landmarks in unified format
+    landmarks = extract_unified_pose_landmarks(pose_results, w, h)
+    if not landmarks:
+        return detected
         
-        # Get MediaPipe pose landmarks for neck analysis
-        nose = np.array([landmarks[0].x * w, landmarks[0].y * h])  # Nose
-        left_ear = np.array([landmarks[7].x * w, landmarks[7].y * h])  # Left ear
-        right_ear = np.array([landmarks[8].x * w, landmarks[8].y * h])  # Right ear
-        left_shoulder = np.array([landmarks[11].x * w, landmarks[11].y * h])  # Left shoulder
-        right_shoulder = np.array([landmarks[12].x * w, landmarks[12].y * h])  # Right shoulder
+    # Get landmark positions
+    nose = landmarks['nose']
+    left_ear = landmarks['left_ear']
+    right_ear = landmarks['right_ear']
+    left_shoulder = landmarks['left_shoulder']
+    right_shoulder = landmarks['right_shoulder']
+    
+    # Check if all keypoints are valid (for YOLO compatibility)
+    if not all(pt[0] > 0 and pt[1] > 0 for pt in [nose, left_ear, right_ear, left_shoulder, right_shoulder]):
+        return detected
         
-        # Calculate ear center and shoulder center
-        ear_center = (left_ear + right_ear) / 2
-        shoulder_center = (left_shoulder + right_shoulder) / 2
+    # Calculate ear center and shoulder center
+    ear_center = (left_ear + right_ear) / 2
+    shoulder_center = (left_shoulder + right_shoulder) / 2
         
-        # Calculate neck length (distance from ear center to shoulder center)
-        neck_vector = ear_center - shoulder_center
-        neck_length = np.linalg.norm(neck_vector)
+    # Calculate neck length (distance from ear center to shoulder center)
+    neck_vector = ear_center - shoulder_center
+    neck_length = np.linalg.norm(neck_vector)
         
-        # Calculate head forward position (nose position relative to shoulder line)
+    # Calculate head forward position (nose position relative to shoulder line)
+    # Project nose onto shoulder line
+    shoulder_vector = right_shoulder - left_shoulder
+    shoulder_length = np.linalg.norm(shoulder_vector)
+        
+    if shoulder_length > 0:
+        # Calculate how far forward the nose is from the shoulder line
+        nose_to_shoulder = nose - left_shoulder
+        shoulder_unit = shoulder_vector / shoulder_length
+            
         # Project nose onto shoulder line
-        shoulder_vector = right_shoulder - left_shoulder
-        shoulder_length = np.linalg.norm(shoulder_vector)
-        
-        if shoulder_length > 0:
-            # Calculate how far forward the nose is from the shoulder line
-            nose_to_shoulder = nose - left_shoulder
-            shoulder_unit = shoulder_vector / shoulder_length
+        projection_length = np.dot(nose_to_shoulder, shoulder_unit)
+        projected_point = left_shoulder + projection_length * shoulder_unit
             
-            # Project nose onto shoulder line
-            projection_length = np.dot(nose_to_shoulder, shoulder_unit)
-            projected_point = left_shoulder + projection_length * shoulder_unit
+        # Calculate forward distance
+        forward_distance = np.linalg.norm(nose - projected_point)
             
-            # Calculate forward distance
-            forward_distance = np.linalg.norm(nose - projected_point)
+        # Turtle neck detection criteria
+        forward_threshold = shoulder_length * 0.25  # Head forward by 25% of shoulder width
+        neck_extension_threshold = neck_length * 1.5  # Neck extended beyond normal length
             
-            # Turtle neck detection criteria
-            forward_threshold = shoulder_length * 0.25  # Head forward by 25% of shoulder width
-            neck_extension_threshold = neck_length * 1.5  # Neck extended beyond normal length
-            
-            if forward_distance > forward_threshold or neck_length > neck_extension_threshold:
-                detected = True
+        if forward_distance > forward_threshold or neck_length > neck_extension_threshold:
+            detected = True
                 
-                # Draw detection visualization
-                cv2.circle(img, (int(nose[0]), int(nose[1])), 5, (0, 0, 255), -1)
-                cv2.circle(img, (int(ear_center[0]), int(ear_center[1])), 5, (0, 255, 0), -1)
-                cv2.circle(img, (int(shoulder_center[0]), int(shoulder_center[1])), 5, (255, 0, 0), -1)
+            # Draw detection visualization
+            cv2.circle(img, (int(nose[0]), int(nose[1])), 5, (0, 0, 255), -1)
+            cv2.circle(img, (int(ear_center[0]), int(ear_center[1])), 5, (0, 255, 0), -1)
+            cv2.circle(img, (int(shoulder_center[0]), int(shoulder_center[1])), 5, (255, 0, 0), -1)
                 
-                # Draw neck line
-                cv2.line(img, (int(ear_center[0]), int(ear_center[1])), 
-                        (int(shoulder_center[0]), int(shoulder_center[1])), (0, 0, 255), 2)
+            # Draw neck line
+            cv2.line(img, (int(ear_center[0]), int(ear_center[1])), 
+                    (int(shoulder_center[0]), int(shoulder_center[1])), (0, 0, 255), 2)
                 
-                # Draw forward projection line
-                cv2.line(img, (int(nose[0]), int(nose[1])), 
-                        (int(projected_point[0]), int(projected_point[1])), (255, 0, 255), 2)
+            # Draw forward projection line
+            cv2.line(img, (int(nose[0]), int(nose[1])), 
+                    (int(projected_point[0]), int(projected_point[1])), (255, 0, 255), 2)
                 
-                # Display detection text
-                cv2.putText(img, "TURTLE NECK", 
-                           (int(nose[0] - 60), int(nose[1] - 20)), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            # Display detection text
+            cv2.putText(img, "TURTLE NECK", 
+                       (int(nose[0] - 60), int(nose[1] - 20)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                 
-                # Display measurements
-                cv2.putText(img, f"Forward: {forward_distance:.1f}", 
-                           (int(nose[0] - 60), int(nose[1] + 20)), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-                cv2.putText(img, f"Neck Length: {neck_length:.1f}", 
-                           (int(nose[0] - 60), int(nose[1] + 35)), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            # Display measurements
+            cv2.putText(img, f"Forward: {forward_distance:.1f}", 
+                       (int(nose[0] - 60), int(nose[1] + 20)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(img, f"Neck Length: {neck_length:.1f}", 
+                       (int(nose[0] - 60), int(nose[1] + 35)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
     
     return detected
 
 #--------- Hunched back -----------#
 def hunched_back(img, pose_results):
     """
-    Detect hunched back posture using MediaPipe pose landmarks
+    Detect hunched back posture using pose landmarks (supports both YOLO and MediaPipe)
     
     Args:
         img: Input image
-        pose_results: MediaPipe pose detection results
+        pose_results: Pose detection results (YOLO or MediaPipe)
     
     Returns:
         bool: True if hunched back is detected (angle between CA and CB < 160 degrees)
     """
     detected = False
+    h, w, _ = img.shape
     
-    if pose_results and pose_results.pose_landmarks:
-        landmarks = pose_results.pose_landmarks.landmark
-        h, w, _ = img.shape
+    # Extract landmarks in unified format
+    landmarks = extract_unified_pose_landmarks(pose_results, w, h)
+    if not landmarks:
+        return detected
         
-        # Get MediaPipe pose landmarks
-        left_shoulder = np.array([landmarks[11].x * w, landmarks[11].y * h])  # Left shoulder
-        right_shoulder = np.array([landmarks[12].x * w, landmarks[12].y * h])  # Right shoulder
-        left_hip = np.array([landmarks[23].x * w, landmarks[23].y * h])  # Left hip
-        right_hip = np.array([landmarks[24].x * w, landmarks[24].y * h])  # Right hip
+    # Get landmark positions
+    left_shoulder = landmarks['left_shoulder']
+    right_shoulder = landmarks['right_shoulder']
+    left_hip = landmarks['left_hip']
+    right_hip = landmarks['right_hip']
+    
+    # Check if all keypoints are valid (for YOLO compatibility)
+    if not all(pt[0] > 0 and pt[1] > 0 for pt in [left_shoulder, right_shoulder, left_hip, right_hip]):
+        return detected
         
-        # Calculate the three key points:
-        # A: middle_shoulder point
-        middle_shoulder = np.array([
-            (left_shoulder[0] + right_shoulder[0]) / 2,
-            (left_shoulder[1] + right_shoulder[1]) / 2
-        ])
+    # Calculate the three key points:
+    # A: middle_shoulder point
+    middle_shoulder = np.array([
+        (left_shoulder[0] + right_shoulder[0]) / 2,
+        (left_shoulder[1] + right_shoulder[1]) / 2
+    ])
         
-        # B: middle_hip point
-        middle_hip = np.array([
-            (left_hip[0] + right_hip[0]) / 2,
-            (left_hip[1] + right_hip[1]) / 2
-        ])
+    # B: middle_hip point
+    middle_hip = np.array([
+        (left_hip[0] + right_hip[0]) / 2,
+        (left_hip[1] + right_hip[1]) / 2
+    ])
         
-        # C: middle_back point (intersection of 2 diagonal lines)
-        # Diagonal 1: from left shoulder to right hip
-        # Diagonal 2: from right shoulder to left hip
-        # Intersection point C
-        middle_back = np.array([
-            (left_shoulder[0] + right_hip[0]) / 2,
-            (left_shoulder[1] + right_hip[1]) / 2
-        ])
+    # C: middle_back point (intersection of 2 diagonal lines)
+    # Diagonal 1: from left shoulder to right hip
+    # Diagonal 2: from right shoulder to left hip
+    # Intersection point C
+    middle_back = np.array([
+        (left_shoulder[0] + right_hip[0]) / 2,
+        (left_shoulder[1] + right_hip[1]) / 2
+    ])
         
-        # Calculate vectors CA and CB
-        vector_CA = middle_shoulder - middle_back  # Vector from C to A
-        vector_CB = middle_hip - middle_back       # Vector from C to B
+    # Calculate vectors CA and CB
+    vector_CA = middle_shoulder - middle_back  # Vector from C to A
+    vector_CB = middle_hip - middle_back       # Vector from C to B
         
-        # Calculate the angle between CA and CB
-        dot_product = np.dot(vector_CA, vector_CB)
-        magnitude_CA = np.linalg.norm(vector_CA)
-        magnitude_CB = np.linalg.norm(vector_CB)
+    # Calculate the angle between CA and CB
+    dot_product = np.dot(vector_CA, vector_CB)
+    magnitude_CA = np.linalg.norm(vector_CA)
+    magnitude_CB = np.linalg.norm(vector_CB)
         
-        if magnitude_CA > 0 and magnitude_CB > 0:
-            cos_angle = dot_product / (magnitude_CA * magnitude_CB)
-            # Clamp cos_angle to [-1, 1] to avoid numerical errors
-            cos_angle = np.clip(cos_angle, -1.0, 1.0)
-            angle_degrees = np.degrees(np.arccos(cos_angle))
+    if magnitude_CA > 0 and magnitude_CB > 0:
+        cos_angle = dot_product / (magnitude_CA * magnitude_CB)
+        # Clamp cos_angle to [-1, 1] to avoid numerical errors
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle_degrees = np.degrees(np.arccos(cos_angle))
             
-            # Detection logic: if angle between CA and CB < 160 degrees, then hunched back
-            if angle_degrees < 160:
-                detected = True
+        # Detection logic: if angle between CA and CB < 160 degrees, then hunched back
+        if angle_degrees < 160:
+            detected = True
                 
-                # Visualization
-                # Draw the three key points
-                cv2.circle(img, (int(middle_shoulder[0]), int(middle_shoulder[1])), 5, (0, 255, 0), -1)  # Green for A
-                cv2.circle(img, (int(middle_hip[0]), int(middle_hip[1])), 5, (255, 0, 0), -1)           # Blue for B
-                cv2.circle(img, (int(middle_back[0]), int(middle_back[1])), 5, (0, 0, 255), -1)        # Red for C
+            # Visualization
+            # Draw the three key points
+            cv2.circle(img, (int(middle_shoulder[0]), int(middle_shoulder[1])), 5, (0, 255, 0), -1)  # Green for A
+            cv2.circle(img, (int(middle_hip[0]), int(middle_hip[1])), 5, (255, 0, 0), -1)           # Blue for B
+            cv2.circle(img, (int(middle_back[0]), int(middle_back[1])), 5, (0, 0, 255), -1)        # Red for C
                 
-                # Draw lines CA and CB
-                cv2.line(img, (int(middle_back[0]), int(middle_back[1])), 
-                        (int(middle_shoulder[0]), int(middle_shoulder[1])), (0, 255, 0), 2)  # CA line
-                cv2.line(img, (int(middle_back[0]), int(middle_back[1])), 
-                        (int(middle_hip[0]), int(middle_hip[1])), (255, 0, 0), 2)            # CB line
+            # Draw lines CA and CB
+            cv2.line(img, (int(middle_back[0]), int(middle_back[1])), 
+                    (int(middle_shoulder[0]), int(middle_shoulder[1])), (0, 255, 0), 2)  # CA line
+            cv2.line(img, (int(middle_back[0]), int(middle_back[1])), 
+                    (int(middle_hip[0]), int(middle_hip[1])), (255, 0, 0), 2)            # CB line
                 
-                # Display detection text and angle
-                cv2.putText(img, f"HUNCHED BACK", 
-                           (int(middle_back[0] - 80), int(middle_back[1] - 20)), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            # Display detection text and angle
+            cv2.putText(img, f"HUNCHED BACK", 
+                       (int(middle_back[0] - 80), int(middle_back[1] - 20)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                 
-                cv2.putText(img, f"Angle: {angle_degrees:.1f}°", 
-                           (int(middle_back[0] - 80), int(middle_back[1] + 20)), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(img, f"Angle: {angle_degrees:.1f}°", 
+                       (int(middle_back[0] - 80), int(middle_back[1] + 20)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
                 
-                cv2.putText(img, f"Threshold: 160°", 
-                           (int(middle_back[0] - 80), int(middle_back[1] + 35)), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(img, f"Threshold: 160°", 
+                       (int(middle_back[0] - 80), int(middle_back[1] + 35)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
     
     return detected
 
@@ -1095,9 +1299,6 @@ class GestureTimer:
         return recommendations
 
 
-
-
-
 def create_landmark_heatmap_video(video_path, landmark_type, landmark_index, output_path=None):
     # Configuration: Set to True for MediaPipe, False for YOLO
     USE_MEDIAPIPE_POSE = False
@@ -1184,15 +1385,114 @@ def create_landmark_heatmap_video(video_path, landmark_type, landmark_index, out
     
     return heatmap_gen
 
-def main():
-    # Configuration: Set to True for MediaPipe, False for YOLO
-    USE_MEDIAPIPE_POSE = False
-    USE_MEDIAPIPE_EMOTION = True  # Use MediaPipe for emotion detection
-    USE_DATABASE = True  # Set to True to save data to Supabase
+def load_config(config_path='config.yaml'):
+    """
+    Load configuration from YAML file
     
-    # Video source configuration
-    VIDEO_PATH = '/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/koto_instrument_short.mp4'
-    USE_WEBCAM = False  # Set to True for webcam, False for video file
+    Args:
+        config_path: Path to configuration file
+        
+    Returns:
+        Dictionary with configuration settings
+    """
+    try:
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
+        print(f"✅ Configuration loaded from {config_path}")
+        return config
+    except FileNotFoundError:
+        print(f"⚠️ Config file {config_path} not found, using defaults")
+        return get_default_config()
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        return get_default_config()
+
+def get_default_config():
+    """Get default configuration if config file is not available"""
+    return {
+        'database': {
+            'enabled': True,
+            'batch_size': 50,        # Number of frames to batch before inserting
+            'batch_timeout': 5.0     # Maximum time to wait before forcing insert (seconds)
+        },
+        'video': {
+            'source_path': '/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/koto_instrument_short.mp4',
+            'use_webcam': False,
+            'skip_frames': 1, 
+            'display_output': True,
+            'alignment_directory': '/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/'
+        },
+        'detection': {
+            'hand_model': 'mediapipe',
+            'pose_model': 'yolo',
+            'facemesh_model': 'mediapipe',  # 'mediapipe' or 'yolo'
+            'emotion_model': 'deepface',
+            'emotion_settings': {
+                'deepface': {
+                    'model_name': 'Facenet',
+                    'detector_backend': 'retinaface',
+                    'enforce_detection': False
+                },
+                'ghostfacenet': {
+                    'model_version': 'v2',
+                    'batch_size': 32
+                },
+                'fer': {
+                    'use_mtcnn': True,
+                    'min_face_size': 40
+                }
+            }
+        },
+        'bad_gestures': {
+            'detect_low_wrists': True,
+            'detect_turtle_neck': True,
+            'detect_hunched_back': True,
+            'detect_fingers_pointing_up': True
+        }
+    }
+
+def create_emotion_detector(config):
+    """
+    Create emotion detector based on configuration
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Emotion detector instance or None
+    """
+    emotion_model = config['detection'].get('emotion_model', 'none').lower()
+    emotion_settings = config['detection'].get('emotion_settings', {})
+    
+    if emotion_model == 'deepface':
+        return DeepFaceDetector(emotion_settings)
+    elif emotion_model == 'ghostfacenet':
+        return GhostFaceNetDetector(emotion_settings)
+    elif emotion_model == 'fer':
+        return FERDetector(emotion_settings)
+    elif emotion_model == 'mediapipe':
+        return None  # Use existing MediaPipe emotion detection
+    elif emotion_model == 'none':
+        return None
+    else:
+        print(f"⚠️ Unknown emotion model: {emotion_model}, using MediaPipe")
+        return None
+
+def main(skip_frames=None, config_path='config.yaml'):
+    # Load configuration
+    config = load_config(config_path)
+    
+    # Configuration from config file
+    USE_MEDIAPIPE_POSE = config['detection'].get('pose_model', 'yolo').lower() == 'mediapipe'
+    USE_DATABASE = config['database'].get('enabled', True)
+    
+    # Override skip_frames from parameter if provided
+    if skip_frames is None:
+        skip_frames = config['video'].get('skip_frames', 1)
+    
+    # Video source configuration from config
+    VIDEO_PATH = config['video'].get('source_path', '/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/koto_instrument_short.mp4')
+    USE_WEBCAM = config['video'].get('use_webcam', False)
     
     # Open video file or webcam
     if USE_WEBCAM:
@@ -1216,6 +1516,13 @@ def main():
     if USE_DATABASE:
         try:
             db = MusicianDatabase()
+            # Configure batch settings from config
+            batch_config = config.get('database', {})
+            if 'batch_size' in batch_config:
+                db.batch_size = batch_config['batch_size']
+            if 'batch_timeout' in batch_config:
+                db.batch_timeout = batch_config['batch_timeout']
+                
             session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             print(f"🗄️ Database connected. Session ID: {session_id}")
         except Exception as e:
@@ -1223,23 +1530,75 @@ def main():
             print("⚠️ Continuing without database export...")
             USE_DATABASE = False
     
+    # Get video alignment offset from database
+    video_start_offset = 0.0  # Default to no offset
+    if USE_DATABASE and db and not USE_WEBCAM:
+        try:
+            video_filename = os.path.basename(VIDEO_PATH)
+            alignment_data = db.get_video_alignment(video_filename)
+            if alignment_data:
+                video_start_offset = alignment_data.get('start_time_offset', 0.0)
+                print(f"📐 Video alignment offset found: {video_start_offset:.3f} seconds")
+            else:
+                print(f"📐 No alignment offset found for {video_filename}")
+        except Exception as e:
+            print(f"⚠️ Error retrieving video alignment: {e}")
+    
+    # Apply video start offset by seeking to the correct position
+    if video_start_offset > 0 and not USE_WEBCAM:
+        print(f"⏭️ Seeking to offset position: {video_start_offset:.3f} seconds")
+        cap.set(cv2.CAP_PROP_POS_MSEC, video_start_offset * 1000)  # Seek to milliseconds
+    
+    # Set up skip_frames logic
+    if skip_frames is None:
+        skip_frames = 0  # Default: process every frame
+    print(f"⚡ Skip frames setting: {skip_frames} (0 = process all frames)")
+    
     # Initialize MediaPipe models
     hand_model = mp.solutions.hands.Hands()
-    # face_mesh_model = mp.solutions.face_mesh.FaceMesh(
-    #     max_num_faces=1,
-    #     refine_landmarks=True,
-    #     min_detection_confidence=0.5,
-    #     min_tracking_confidence=0.5
-    # )
+    
+    # Initialize face mesh based on configuration - using new FaceLandmarker API
+    facemesh_model_name = config['detection'].get('facemesh_model', 'none').lower()
+    USE_NEW_FACELANDMARKER_API = facemesh_model_name == 'mediapipe'
+    face_mesh_model = None
+    
+    if facemesh_model_name == 'mediapipe':
+        try:
+            # Use new FaceLandmarker API
+            base_options = python.BaseOptions(model_asset_path='checkpoints/face_landmarker.task')
+            options = vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+                num_faces=1
+            )
+            face_mesh_model = vision.FaceLandmarker.create_from_options(options)
+            print("✅ MediaPipe FaceLandmarker API enabled")
+        except Exception as e:
+            print(f"❌ FaceLandmarker initialization failed: {e}")
+            face_mesh_model = None
+            print("✅ Face detection disabled due to initialization failure")
+    elif facemesh_model_name == 'yolo':
+        # YOLO face detection/landmarks would use a different model
+        # For now, we'll use the existing YOLO pose model which includes face keypoints
+        face_mesh_model = "yolo_face"  # Placeholder to indicate YOLO face detection
+        USE_NEW_FACELANDMARKER_API = False
+        print("✅ YOLO Face detection enabled")
+    else:
+        print("✅ Face detection disabled")
     
     # Initialize emotion detector based on configuration
-    # if USE_MEDIAPIPE_EMOTION:
-    #     emotion_detector = None  # We'll use MediaPipe directly
-    #     print("✅ Using MediaPipe for emotion detection")
-    # else:
-    #     # Initialize FER emotion detector
-    #     emotion_detector = None # FER(mtcnn=True) # Commented out as FER is removed
-    #     print("✅ Using MediaPipe for emotion detection")
+    emotion_detector = create_emotion_detector(config)
+    if emotion_detector:
+        if not emotion_detector.initialize_model():
+            print("⚠️ Emotion detector initialization failed, disabling emotion detection")
+            emotion_detector = None
+    else:
+        emotion_model_type = config['detection'].get('emotion_model', 'none')
+        if emotion_model_type == 'mediapipe':
+            print("✅ Using MediaPipe for emotion detection")
+        else:
+            print("✅ Emotion detection disabled")
     
     # Initialize pose detection based on configuration
     if USE_MEDIAPIPE_POSE:
@@ -1265,6 +1624,7 @@ def main():
     # gesture_timer.set_fps(fps)  # Set FPS for accurate time calculations
     
     frame_count = 0
+    processed_frames = 0
     start_time = time.time()
     
     while True: 
@@ -1272,57 +1632,152 @@ def main():
         if not ret:
             break
         
+        # Apply skip_frames logic
+        if skip_frames > 0 and frame_count % (skip_frames + 1) != 0:
+            frame_count += 1
+            continue  # Skip this frame
+        
         frame_start_time = time.time()
         
-        # Calculate timestamp in milliseconds
-        timestamp_ms = int((frame_count / fps) * 1000)
+        # Calculate current video time from video start offset
+        current_video_time = video_start_offset + (frame_count / fps)
             
         # Convert to RGB for MediaPipe hands
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Hand detection with MediaPipe Vision Task
+        # Hand detection with timing
+        hand_start_time = time.time()
         multi_hand_landmarks = get_hand_landmarks(hand_model, img_rgb)
+        hand_processing_time_ms = int((time.time() - hand_start_time) * 1000)
 
-        # # Face detection with MediaPipe Vision Task (Face Mesh)
-        # multi_face_landmarks = get_face_landmarks(face_mesh_model, img_rgb)
-
-        # Pose detection based on configuration
+        # Pose detection with timing based on configuration (moved before face mesh)
+        pose_start_time = time.time()
         if USE_MEDIAPIPE_POSE:
             pose_results = get_mp_pose_landmarks(pose_model, img_rgb)
         else:
             pose_results = pose_model(frame, verbose=False)
+        pose_processing_time_ms = int((time.time() - pose_start_time) * 1000)
+
+        # Face mesh detection with timing based on configuration
+        face_detection_result = None
+        multi_face_landmarks = None
+        facemesh_processing_time_ms = 0
+        if face_mesh_model:
+            facemesh_start_time = time.time()
+            if USE_NEW_FACELANDMARKER_API:
+                # Use new FaceLandmarker API
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+                face_detection_result = face_mesh_model.detect(mp_image)
+            else:  # YOLO face detection
+                # For YOLO, we can extract face keypoints from pose results
+                # YOLO pose includes face keypoints (nose, eyes, ears)
+                multi_face_landmarks = extract_face_keypoints_from_yolo(pose_results)
+            facemesh_processing_time_ms = int((time.time() - facemesh_start_time) * 1000)
         
-        # Emotion detection based on configuration - COMMENTED OUT
-        # if USE_MEDIAPIPE_EMOTION:
-        #     emotions_in_frame = detect_emotions_mediapipe(frame, face_mesh_model)
-        # else:
-        #     emotions_in_frame = None # emotion_detector.detect_emotions(frame) # Commented out as FER is removed
+        # Emotion detection with timing based on configuration
+        emotion_start_time = time.time()
+        emotions_in_frame = []
+        emotion_scores = {'angry': 0.0, 'disgust': 0.0, 'fear': 0.0, 'happy': 0.0, 'sad': 0.0, 'surprise': 0.0, 'neutral': 0.0}
+        
+        if emotion_detector:
+            emotions_in_frame = emotion_detector.detect_emotions(frame)
+            # Convert to database format
+            if emotions_in_frame:
+                # Use the most confident detection
+                best_detection = max(emotions_in_frame, key=lambda x: x.get('confidence', 0))
+                emotion_scores = best_detection.get('emotions', emotion_scores)
+        elif config['detection'].get('emotion_model', 'none') == 'mediapipe' and face_detection_result:
+            # Use MediaPipe emotion detection with new FaceLandmarker API
+            if face_detection_result.face_landmarks:
+                for face_landmarks in face_detection_result.face_landmarks:
+                    # Get face bounding box from landmarks
+                    h, w, _ = frame.shape
+                    x_coords = [landmark.x * w for landmark in face_landmarks]
+                    y_coords = [landmark.y * h for landmark in face_landmarks]
+                    
+                    x_min, x_max = int(min(x_coords)), int(max(x_coords))
+                    y_min, y_max = int(min(y_coords)), int(max(y_coords))
+                    
+                    # Analyze facial expression using landmarks
+                    emotions = analyze_facial_expression_mediapipe(face_landmarks, h, w)
+                    
+                    emotions_in_frame.append({
+                        "box": (x_min, y_min, x_max - x_min, y_max - y_min),
+                        "emotions": emotions
+                    })
+                
+                if emotions_in_frame:
+                    # Use the most confident detection
+                    best_detection = max(emotions_in_frame, key=lambda x: max(x['emotions'].values()) if 'emotions' in x else 0)
+                    if 'emotions' in best_detection:
+                        emotion_scores = best_detection['emotions']
+        
+        emotion_processing_time_ms = int((time.time() - emotion_start_time) * 1000)
 
         # Convert landmarks to database format
         left_hand_landmarks, right_hand_landmarks = convert_hand_landmarks_to_dict(multi_hand_landmarks)
         pose_landmarks = convert_pose_landmarks_to_dict(pose_results)
         
-        # Calculate processing time
+        # Convert face mesh landmarks to database format
+        facemesh_landmarks = None
+        if face_detection_result and face_detection_result.face_landmarks:
+            # New FaceLandmarker API format: convert to database format
+            face_landmarks = face_detection_result.face_landmarks[0]  # Take first face
+            facemesh_landmarks = []
+            for landmark in face_landmarks:
+                facemesh_landmarks.append({
+                    "x": float(landmark.x),
+                    "y": float(landmark.y),
+                    "z": float(landmark.z) if hasattr(landmark, 'z') else 0.0,
+                    "confidence": float(landmark.visibility) if hasattr(landmark, 'visibility') else 1.0
+                })
+        elif multi_face_landmarks:
+            # YOLO format: already converted to dictionary format
+            facemesh_landmarks = multi_face_landmarks[0]
+        
+        # Check for bad gestures (for database storage)
+        low_wrist_detected = low_wrists(frame, multi_hand_landmarks)
+        turtle_neck_detected = turtle_neck(frame, pose_results)
+        hunched_back_detected = hunched_back(frame, pose_results)
+        fingers_up_detected = fingers_pointing_up_to_the_sky(frame, multi_hand_landmarks)
+        
+        # Calculate total processing time
         processing_time_ms = int((time.time() - frame_start_time) * 1000)
         
-        # Save to database every 10th frame to reduce database load
-        if USE_DATABASE and db and (frame_count % 10 == 0):
+        # Save processed frames to database (using batch insert)
+        if USE_DATABASE and db:
             try:
-                success = db.insert_frame_data(
+                success = db.add_frame_to_batch(
                     session_id=session_id,
                     frame_number=frame_count,
-                    timestamp_ms=timestamp_ms,
                     video_file=video_file,
-                    fps=fps,
+                    original_time=(frame_count - 1) / fps,
+                    synced_time=((frame_count - 1) / fps) + video_start_offset,
                     left_hand_landmarks=left_hand_landmarks,
                     right_hand_landmarks=right_hand_landmarks,
                     pose_landmarks=pose_landmarks,
+                    facemesh_landmarks=facemesh_landmarks,
+                    emotions=emotion_scores,
+                    bad_gestures={
+                        'low_wrists': low_wrist_detected,
+                        'turtle_neck': turtle_neck_detected,
+                        'hunched_back': hunched_back_detected,
+                        'fingers_pointing_up': fingers_up_detected
+                    },
                     processing_time_ms=processing_time_ms,
-                    model_version="mediapipe_v1.0"
+                    hand_processing_time_ms=hand_processing_time_ms,
+                    pose_processing_time_ms=pose_processing_time_ms,
+                    facemesh_processing_time_ms=facemesh_processing_time_ms,
+                    emotion_processing_time_ms=emotion_processing_time_ms,
+                    hand_model=config['detection'].get('hand_model', 'mediapipe'),
+                    pose_model=config['detection'].get('pose_model', 'yolo'),
+                    facemesh_model=config['detection'].get('facemesh_model', 'none'),
+                    emotion_model=emotion_detector.model_name if emotion_detector else config['detection'].get('emotion_model', 'none')
                 )
                 
-                if not success:
-                    print(f"⚠️ Failed to save frame {frame_count} to database")
+                if success:
+                    # Batch was flushed automatically
+                    pass
                     
             except Exception as e:
                 print(f"❌ Database error on frame {frame_count}: {e}")
@@ -1333,35 +1788,63 @@ def main():
             draw_mp_pose(frame, pose_results)  # Draw MediaPipe pose
         else:
             draw_yolo_pose(frame, pose_results)  # Draw YOLO pose
-        # draw_emotion_results(frame, emotions_in_frame)  # Draw emotion results # Commented out as FER is removed
+        
+        # Draw face mesh if available
+        if face_detection_result and face_detection_result.face_landmarks:
+            # Use new FaceLandmarker API drawing
+            draw_facelandmarker_landmarks(frame, face_detection_result)
+        elif multi_face_landmarks:
+            # YOLO format
+            draw_yolo_face_keypoints(frame, multi_face_landmarks)
+            
+        # Draw emotion results if available
+        if emotions_in_frame:
+            draw_emotion_results(frame, emotions_in_frame)
 
-        # Draw face mesh if using MediaPipe emotion detection - COMMENTED OUT
-        # if USE_MEDIAPIPE_EMOTION:
-        #     draw_mp_face_mesh(frame, multi_face_landmarks)
+        # Face mesh is already drawn above with the new API
 
         # Display real-time information
         elapsed_time = time.time() - start_time
         current_fps = frame_count / elapsed_time if elapsed_time > 0 else 0
         
         # Display frame info
-        cv2.putText(frame, f"Frame: {frame_count} | Time: {timestamp_ms/1000:.1f}s", 
+        cv2.putText(frame, f"Frame: {frame_count} | Time: {current_video_time:.1f}s | Skip: {skip_frames}", 
                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.putText(frame, f"Processing FPS: {current_fps:.1f} | Video FPS: {fps:.1f}", 
                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
         
         # Display database status
         if USE_DATABASE and session_id:
-            db_status = f"DB: {session_id}"
-            if frame_count % 10 == 0:
-                db_status += " (saving...)"
-            cv2.putText(frame, db_status, 
+            cv2.putText(frame, f"DB: {session_id} (saving all processed frames)", 
                        (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
         
-        # Display landmark counts
+        # Display landmark counts and processing times
         hand_count = len(multi_hand_landmarks) if multi_hand_landmarks else 0
-        pose_detected = "✓" if pose_results and pose_results.pose_landmarks else "✗"
-        cv2.putText(frame, f"Hands: {hand_count} | Pose: {pose_detected}", 
+        
+        # Check pose detection for both YOLO and MediaPipe formats
+        if isinstance(pose_results, list):
+            # YOLO format
+            pose_detected = "✓" if pose_results and pose_results[0].keypoints is not None else "✗"
+        else:
+            # MediaPipe format
+            pose_detected = "✓" if pose_results and pose_results.pose_landmarks else "✗"
+            
+        # Count faces from new FaceLandmarker API or YOLO
+        if face_detection_result and face_detection_result.face_landmarks:
+            facemesh_count = len(face_detection_result.face_landmarks)
+        elif multi_face_landmarks:
+            facemesh_count = len(multi_face_landmarks)
+        else:
+            facemesh_count = 0
+        
+        cv2.putText(frame, f"Hands: {hand_count} | Pose: {pose_detected} | Face: {facemesh_count}", 
                    (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        
+        # Display processing times breakdown
+        cv2.putText(frame, f"Hand: {hand_processing_time_ms}ms | Pose: {pose_processing_time_ms}ms", 
+                   (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+        cv2.putText(frame, f"FaceMesh: {facemesh_processing_time_ms}ms | Emotion: {emotion_processing_time_ms}ms", 
+                   (10, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
         # Check for bad gestures and update timer - COMMENTED OUT
         # low_wrists_detected = low_wrists(frame, multi_hand_landmarks)
@@ -1463,6 +1946,7 @@ def main():
         
 
         
+        # Video display 
         cv2.imshow("Multi-Model Detection", frame)
         
         # Press 'q' to quit
@@ -1500,7 +1984,10 @@ def main():
             if session_data:
                 saved_frames = len(session_data)
                 print(f"💾 Frames Saved: {saved_frames}")
-                print(f"📊 Data Reduction: Saved every 10th frame ({saved_frames}/{frame_count})")
+                if skip_frames > 0:
+                    print(f"📊 Data Reduction: Saved every {skip_frames + 1} frame(s) ({saved_frames}/{frame_count})")
+                else:
+                    print(f"📊 Data Storage: Saved all frames ({saved_frames}/{frame_count})")
                 
                 # Calculate total landmarks saved
                 total_landmarks = 0
@@ -1522,9 +2009,31 @@ def main():
     else:
         print(f"\n💡 Database export was disabled")
     
+    # Cleanup database and flush remaining batch data
+    if USE_DATABASE and db:
+        try:
+            db.close()
+        except Exception as e:
+            print(f"❌ Error closing database: {e}")
+    
+    # Cleanup emotion detector
+    if emotion_detector:
+        emotion_detector.cleanup()
+        print("🧹 Emotion detector cleaned up")
+    
     print("="*60)
     print("🎵 Session completed!")
     print("="*60)
 
 if __name__ == '__main__':
-    main()                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Musician Tracking Detection System')
+    parser.add_argument('--config', '-c', default='config.yaml', 
+                       help='Path to configuration file (default: config.yaml)')
+    parser.add_argument('--skip-frames', type=int, 
+                       help='Number of frames to skip (overrides config)')
+    
+    args = parser.parse_args()
+    
+    main(skip_frames=args.skip_frames, config_path=args.config)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  

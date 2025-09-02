@@ -13,23 +13,37 @@ import subprocess
 import os
 import sys
 import glob
+import yaml
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
-from database_setup import MusicianDatabase
+from src.database.setup import MusicianDatabase
 
-def extract_audio_with_ffmpeg(video_path, output_path, duration=90, start_time=0):
-    """Extract audio using ffmpeg directly"""
+def extract_audio_with_ffmpeg(video_path, output_path, duration=None, start_time=0):
+    """Extract audio using ffmpeg directly
+    
+    Args:
+        video_path: Path to video file
+        output_path: Path to save audio file
+        duration: Duration to extract (None for full video)
+        start_time: Start time in seconds
+    """
     cmd = [
         'ffmpeg', '-y',
         '-ss', str(start_time),
         '-i', video_path,
-        '-t', str(duration),
+    ]
+    
+    # Only add duration limit if specified
+    if duration is not None:
+        cmd.extend(['-t', str(duration)])
+    
+    cmd.extend([
         '-vn',  # No video
         '-acodec', 'pcm_s16le',
         '-ar', '22050',  # Sample rate
         '-ac', '1',  # Mono
         output_path
-    ]
+    ])
     
     print(f"Extracting audio from {os.path.basename(video_path)}...")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -263,35 +277,17 @@ def calculate_matching_duration(video_profiles, offsets, min_overlap_duration=30
     """
     print("DEBUG: Calculating matching duration...")
     
-    # Get video durations from energy profiles (only 90s samples)
+    # Get video durations from energy profiles (full audio)
     profile_durations = {}
     for video, (energy, time_axis) in video_profiles.items():
         profile_durations[video] = time_axis[-1]
-        print(f"  {video} profile duration: {profile_durations[video]:.1f}s (from 90s audio sample)")
+        print(f"  {video} profile duration: {profile_durations[video]:.1f}s (from full audio)")
     
-    # Get actual full video durations
-    actual_durations = {}
-    for video in video_profiles.keys():
-        # Try to get actual video duration
-        video_path = None
-        # Search for the video file
-        import glob
-        video_files = glob.glob(f"video/multi-cam video/vid_shot1/{video}")
-        if video_files:
-            video_path = video_files[0]
-        else:
-            # Try current directory structure
-            video_files = glob.glob(f"vid_shot1/{video}")
-            if video_files:
-                video_path = video_files[0]
-        
-        if video_path:
-            actual_duration = get_video_duration(video_path)
-            actual_durations[video] = actual_duration
-            print(f"  {video} actual duration: {actual_duration:.1f}s ({actual_duration/60:.1f} minutes)")
-        else:
-            actual_durations[video] = profile_durations[video]
-            print(f"  {video} duration: {profile_durations[video]:.1f}s (using profile duration)")
+    # Since we're now extracting full audio, profile durations ARE the actual durations
+    actual_durations = profile_durations.copy()
+    print("\nActual video durations (from full audio extraction):")
+    for video, duration in actual_durations.items():
+        print(f"  {video}: {duration:.1f}s ({duration/60:.1f} minutes)")
     
     # Calculate effective start and end times after alignment using ACTUAL durations
     aligned_ranges = {}
@@ -384,11 +380,48 @@ def get_video_duration(video_path):
         return float(result.stdout.strip())
     return None
 
+def load_config(config_path='config.yaml'):
+    """
+    Load configuration from YAML file
+    
+    Args:
+        config_path: Path to configuration file (relative to parent directory)
+        
+    Returns:
+        Dictionary with configuration settings
+    """
+    # Look for config in parent directory
+    config_full_path = os.path.join(parent_dir, config_path)
+    
+    try:
+        with open(config_full_path, 'r') as file:
+            config = yaml.safe_load(file)
+        print(f"✅ Configuration loaded from {config_full_path}")
+        return config
+    except FileNotFoundError:
+        print(f"⚠️ Config file {config_full_path} not found")
+        return None
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        return None
+
 def main():
-    # Parse command line arguments
-    if len(sys.argv) != 2:
-        print("Usage: python shape_based_aligner.py <video_directory>")
-        print("Example: python shape_based_aligner.py vid_shot1")
+    # Try to load config first
+    config = load_config()
+    
+    # Parse command line arguments or use config
+    if len(sys.argv) == 2:
+        # Command line argument provided
+        video_dir = sys.argv[1]
+        print(f"Using command line argument: {video_dir}")
+    elif config and 'video' in config and 'alignment_directory' in config['video']:
+        # Use config file
+        video_dir = config['video']['alignment_directory']
+        print(f"Using config file directory: {video_dir}")
+    else:
+        print("Usage: python shape_based_aligner_multi.py <video_directory>")
+        print("   OR: Configure alignment_directory in config.yaml")
+        print("Example: python shape_based_aligner_multi.py vid_shot1")
         print("  - video_directory: Directory containing videos to align")
         print("\nThe script will:")
         print("  1. Process all MP4 files in the directory")
@@ -396,8 +429,6 @@ def main():
         print("  3. Calculate positive alignment offsets and matching duration")
         print("  4. Store results in the database")
         return 1
-    
-    video_dir = sys.argv[1]
     
     # Check if directory exists
     if not os.path.exists(video_dir):
@@ -439,8 +470,9 @@ def main():
         video_name = os.path.basename(video_path)
         audio_path = f'temp_audio/{os.path.splitext(video_name)[0]}_audio.wav'
         
-        # Extract audio (first 90 seconds for analysis)
-        audio, sr = extract_audio_with_ffmpeg(video_path, audio_path, duration=90, start_time=0)
+        # Extract full audio for analysis
+        print(f"Extracting full audio from {video_name}...")
+        audio, sr = extract_audio_with_ffmpeg(video_path, audio_path, duration=None, start_time=0)
         
         if audio is None:
             print(f"❌ Failed to extract audio from {video_name}")
