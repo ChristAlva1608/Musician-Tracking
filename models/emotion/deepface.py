@@ -1,16 +1,17 @@
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from emotion.deepface_detector import DeepFaceDetector as BaseDeepFaceDetector
 from .base_emotion_detector import BaseEmotionDetector
 import cv2
 import numpy as np
 from typing import Optional, Dict, Any, List
 
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except ImportError:
+    DEEPFACE_AVAILABLE = False
+
 
 class DeepFaceEmotionDetector(BaseEmotionDetector):
-    """Wrapper for DeepFace emotion detection model"""
+    """DeepFace emotion detection model"""
     
     def __init__(self, model_name: str = "Facenet", 
                  detector_backend: str = "retinaface",
@@ -20,17 +21,14 @@ class DeepFaceEmotionDetector(BaseEmotionDetector):
         self.detector_backend = detector_backend
         self.enforce_detection = enforce_detection
         self.emotion_classes = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
+        self.available = DEEPFACE_AVAILABLE
         
-        try:
-            self.detector = BaseDeepFaceDetector(
-                model_name=model_name,
-                detector_backend=detector_backend,
-                enforce_detection=enforce_detection
-            )
-            print(f"✅ DeepFace emotion detector loaded: {model_name}")
-        except Exception as e:
-            print(f"❌ Failed to load DeepFace emotion detector: {e}")
-            self.detector = None
+        if not DEEPFACE_AVAILABLE:
+            print("❌ DeepFace not available. Install with: pip install deepface")
+        else:
+            print(f"✅ DeepFace emotion detector initialized: {model_name}")
+            print(f"  Detector backend: {detector_backend}")
+            print(f"  Enforce detection: {enforce_detection}")
     
     def detect(self, frame: np.ndarray) -> Optional[Dict]:
         """
@@ -42,12 +40,48 @@ class DeepFaceEmotionDetector(BaseEmotionDetector):
         Returns:
             Emotion detection results or None
         """
-        if self.detector is None:
+        if not self.available:
             return None
             
         try:
-            results = self.detector.detect_emotion(frame)
-            return results
+            # Analyze frame with DeepFace
+            result = DeepFace.analyze(
+                img_path=frame,
+                actions=['emotion'],
+                enforce_detection=self.enforce_detection,
+                detector_backend=self.detector_backend,
+                silent=True
+            )
+            
+            # Handle both single result and list of results
+            if not isinstance(result, list):
+                result = [result]
+            
+            if result and len(result) > 0:
+                detection = result[0]  # Use first face
+                if 'emotion' in detection and 'region' in detection:
+                    # Get emotion scores and normalize
+                    emotion_scores = detection['emotion']
+                    normalized_scores = {k.lower(): v/100.0 for k, v in emotion_scores.items()}
+                    
+                    # Get dominant emotion
+                    dominant_emotion = max(normalized_scores, key=normalized_scores.get)
+                    confidence = normalized_scores[dominant_emotion]
+                    
+                    # Get bounding box
+                    region = detection['region']
+                    bbox = (region['x'], region['y'], region['w'], region['h'])
+                    
+                    return {
+                        'emotions': normalized_scores,
+                        'dominant_emotion': dominant_emotion,
+                        'confidence': confidence,
+                        'face_detected': True,
+                        'bbox': bbox
+                    }
+            
+            return None
+            
         except Exception as e:
             print(f"❌ DeepFace emotion detection failed: {e}")
             return None
@@ -133,7 +167,7 @@ class DeepFaceEmotionDetector(BaseEmotionDetector):
             "model_name": self.model_name,
             "detector_backend": self.detector_backend,
             "enforce_detection": self.enforce_detection,
-            "available": self.detector is not None,
+            "available": self.available,
             "emotion_classes": ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
         }
     
