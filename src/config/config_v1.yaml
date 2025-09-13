@@ -1,0 +1,116 @@
+# Configuration file for Musician Tracking System
+
+# Database settings
+database:
+  enabled: false
+  table_name: "musician_frame_analysis_1"
+  batch_size: 50
+  batch_timeout: 5.0
+  
+  # Transcript storage configuration
+  save_transcript_segments: true      # Save transcript segments to transcript_video table
+  link_frame_to_transcript: true     # Add transcript_segment_id reference to frame table
+
+# Video processing settings
+video:
+  # Single video processing (for detect.py)
+  source_path: "/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/original_video/cam_1.mp4"  # Path to video file or 0 for webcam
+  use_webcam: false  # Set to true to use webcam instead of video file
+  skip_frames: 0  # 0 = process all frames, 1 = every other frame, 2 = every third frame, etc.
+  display_output: true
+  
+  # Output video settings
+  save_output_video: true  # Save annotated video with detection results
+  output_video_path: "output/original_video_cam_1_sk_0.mp4"  # Path to save the output video
+  output_format: "mp4"  # Video format
+  preserve_audio: true  # Preserve original audio in output video
+  temp_video_path: "output/temp_video_no_audio.mp4"  # Temporary video without audio
+  
+  # Report generation settings
+  generate_report: true  # Generate processing report
+  report_path: "src/analysis/detection_report.txt"  # Path to save the report
+  
+  # Multi-video alignment (for shape_based_aligner_multi.py)
+  alignment_directory: "/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/original video"  # Directory containing videos to align
+  
+# Detection models configuration
+detection:
+  # Hand detection model
+  hand_model: none  # Options: "mediapipe", "yolo"
+  hand_confidence: 0.5
+  
+  # Pose detection model  
+  pose_model: mediapipe  # Options: "mediapipe", "yolo"
+  pose_confidence: 0.5
+  
+  # Face mesh detection model
+  facemesh_model: none  # Options: "mediapipe", "yolo+mediapipe", "yolo", "none"
+  facemesh_confidence: 0.5
+  face_confidence: 0.5
+  yolo_face_model_path: "checkpoints/yolov8n-face.pt"
+  
+  # Emotion detection model
+  emotion_model: none  # Options: "deepface", "ghostfacenet", "fer", "mediapipe", "none"
+  
+  # Transcript model
+  transcript_model: whisper  # Options: "whisper", "none"
+  transcript_settings:
+    model_size: "tiny"  # Options: "tiny", "base", "small", "medium", "large"
+    language: "en"  # Language code or "auto" for auto-detection
+    enabled: true  # Enable transcript processing
+    chunk_duration: 15.0  # Process audio in chunks of this duration (seconds)
+  
+  emotion_settings:
+    # DeepFace specific settings
+    deepface:
+      model_name: "Facenet"  # Options: "VGG-Face", "Facenet", "Facenet512", "OpenFace", "DeepFace", "DeepID", "ArcFace", "Dlib", "SFace"
+      detector_backend: "retinaface"  # Options: "opencv", "ssd", "dlib", "mtcnn", "retinaface", "mediapipe"
+      enforce_detection: false
+      
+    # GhostFaceNet specific settings
+    ghostfacenet:
+      model_version: "v2"
+      batch_size: 32
+      
+    # FER specific settings
+    fer:
+      use_mtcnn: true  # Use MTCNN for face detection
+      min_face_size: 40
+      
+    # MediaPipe emotion settings (if using MediaPipe for emotion)
+    mediapipe:
+      min_detection_confidence: 0.5
+      min_tracking_confidence: 0.5
+
+# Bad gesture detection settings
+bad_gestures:
+  detect_low_wrists: true
+  detect_turtle_neck: true
+  detect_hunched_back: true
+  detect_fingers_pointing_up: true
+  
+  # Thresholds for bad gesture detection
+  thresholds:
+    low_wrist_threshold: 0.1  # Relative to elbow position
+    turtle_neck_angle: 30  # Degrees from vertical
+    hunched_back_angle: 20  # Degrees from vertical
+    finger_pointing_threshold: 0.8  # Confidence threshold
+
+# Heatmap settings
+heatmap:
+  enabled: false
+  resolution: [640, 480]
+  gaussian_sigma: 10
+  update_interval: 5  # Update heatmap every N frames
+  
+# Logging settings
+logging:
+  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  save_to_file: true
+  log_file: "tracking.log"
+  
+# Performance settings
+performance:
+  max_workers: 4  # Number of parallel workers for processing
+  buffer_size: 100  # Frame buffer size
+  gpu_enabled: true  # Use GPU if available
