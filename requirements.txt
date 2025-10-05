@@ -5,3 +5,14 @@ supabase
 python-dotenv
 ultralytics
 numpy
+torch
+torchvision
+Pillow
+fer
+pyyaml
+deepface
+openai-whisper
+pyaudio
+ffmpeg-python
+sqlalchemy
+psycopg2-binary

@@ -1,124 +1,184 @@
-#!/usr/bin/env python3
-"""
-Base Emotion Detector Class
-Abstract base class for all emotion detection models
-"""
-
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Optional, Dict, Any, List
+
 
 class BaseEmotionDetector(ABC):
     """Abstract base class for emotion detection models"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, confidence: float = 0.5):
+        self.confidence = confidence
+        self.model_type = "emotion"
+        self.emotion_classes = []  # To be defined by subclasses
+    
+    @abstractmethod
+    def detect(self, frame: np.ndarray) -> Optional[Dict]:
         """
-        Initialize emotion detector
+        Detect emotions in the frame
         
         Args:
-            config: Configuration dictionary containing model-specific settings
-        """
-        self.config = config
-        self.emotion_classes = []
-        self.model_name = ""
-        
-    @abstractmethod
-    def initialize_model(self) -> bool:
-        """
-        Initialize the emotion detection model
-        
+            frame: Input image frame (BGR format)
+            
         Returns:
-            bool: True if initialization successful, False otherwise
+            Model-specific emotion detection results or None if no face/emotion detected
         """
         pass
     
     @abstractmethod
-    def detect_emotions(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+    def convert_to_dict(self, results: Dict) -> Optional[Dict]:
         """
-        Detect emotions in a single frame
+        Convert emotion detection results to standardized dictionary format
         
         Args:
-            frame: Input image as numpy array (BGR format)
+            results: Model-specific emotion detection results
             
         Returns:
-            List of emotion detection results, each containing:
-            - bbox: Tuple of (x, y, w, h) for face bounding box
-            - emotions: Dict of emotion_name -> confidence_score
-            - dominant_emotion: String name of most confident emotion
-            - confidence: Float confidence score for dominant emotion
+            Standardized dictionary with keys:
+            - emotions: Dict[str, float] - emotion scores
+            - dominant_emotion: str - emotion with highest score
+            - confidence: float - confidence of dominant emotion
+            - face_detected: bool - whether face was detected
+            - bbox: Optional[Dict] - face bounding box if available
         """
         pass
     
-    def get_emotion_scores_dict(self, emotions_array: np.ndarray) -> Dict[str, float]:
+    @abstractmethod
+    def draw_results(self, frame: np.ndarray, results: Dict) -> np.ndarray:
         """
-        Convert emotion scores array to dictionary
-        
-        Args:
-            emotions_array: Numpy array of emotion scores
-            
-        Returns:
-            Dictionary mapping emotion names to scores
-        """
-        if len(emotions_array) != len(self.emotion_classes):
-            raise ValueError(f"Emotions array length {len(emotions_array)} doesn't match classes length {len(self.emotion_classes)}")
-            
-        return {emotion: float(score) for emotion, score in zip(self.emotion_classes, emotions_array)}
-    
-    def get_dominant_emotion(self, emotion_scores: Dict[str, float]) -> Tuple[str, float]:
-        """
-        Get dominant emotion and its confidence
-        
-        Args:
-            emotion_scores: Dictionary of emotion name -> confidence score
-            
-        Returns:
-            Tuple of (dominant_emotion_name, confidence_score)
-        """
-        if not emotion_scores:
-            return "neutral", 0.0
-            
-        dominant_emotion = max(emotion_scores, key=emotion_scores.get)
-        confidence = emotion_scores[dominant_emotion]
-        
-        return dominant_emotion, confidence
-    
-    def validate_frame(self, frame: np.ndarray) -> bool:
-        """
-        Validate input frame
+        Draw emotion detection results on the frame
         
         Args:
             frame: Input image frame
+            results: Emotion detection results
             
         Returns:
-            bool: True if frame is valid, False otherwise
+            Frame with drawn emotion information
         """
-        if frame is None:
-            return False
-            
-        if len(frame.shape) != 3:
-            return False
-            
-        if frame.shape[2] != 3:
-            return False
-            
-        return True
+        pass
     
+    @abstractmethod
     def get_model_info(self) -> Dict[str, Any]:
         """
         Get model information
         
         Returns:
-            Dictionary with model information
+            Dictionary containing model metadata including name, type, confidence_threshold, emotion_classes, etc.
         """
-        return {
-            'model_name': self.model_name,
-            'emotion_classes': self.emotion_classes,
-            'config': self.config
-        }
+        pass
     
     @abstractmethod
     def cleanup(self):
         """
-        Cleanup model resources
+        Cleanup resources and close model
         """
         pass
+    
+    def get_dominant_emotion(self, results: Dict) -> Optional[str]:
+        """
+        Get the dominant emotion from results
+        
+        Args:
+            results: Emotion detection results
+            
+        Returns:
+            Name of dominant emotion or None
+        """
+        converted = self.convert_to_dict(results)
+        if not converted:
+            return None
+        return converted.get('dominant_emotion')
+    
+    def get_emotion_confidence(self, results: Dict) -> float:
+        """
+        Get the confidence of the dominant emotion
+        
+        Args:
+            results: Emotion detection results
+            
+        Returns:
+            Confidence score (0.0 to 1.0)
+        """
+        converted = self.convert_to_dict(results)
+        if not converted:
+            return 0.0
+        return converted.get('confidence', 0.0)
+    
+    def get_all_emotions(self, results: Dict) -> Dict[str, float]:
+        """
+        Get all emotion scores
+        
+        Args:
+            results: Emotion detection results
+            
+        Returns:
+            Dictionary mapping emotion names to scores
+        """
+        converted = self.convert_to_dict(results)
+        if not converted:
+            return {}
+        return converted.get('emotions', {})
+    
+    def has_face_detected(self, results: Dict) -> bool:
+        """
+        Check if face was detected for emotion analysis
+        
+        Args:
+            results: Emotion detection results
+            
+        Returns:
+            True if face was detected, False otherwise
+        """
+        converted = self.convert_to_dict(results)
+        if not converted:
+            return False
+        return converted.get('face_detected', False)
+    
+    def get_emotion_above_threshold(self, results: Dict, threshold: float = 0.5) -> List[str]:
+        """
+        Get emotions that are above a certain confidence threshold
+        
+        Args:
+            results: Emotion detection results
+            threshold: Minimum confidence threshold
+            
+        Returns:
+            List of emotion names above threshold
+        """
+        emotions = self.get_all_emotions(results)
+        return [emotion for emotion, score in emotions.items() if score >= threshold]
+    
+    def normalize_emotion_scores(self, results: Dict) -> Optional[Dict[str, float]]:
+        """
+        Normalize emotion scores to sum to 1.0
+        
+        Args:
+            results: Emotion detection results
+            
+        Returns:
+            Dictionary with normalized emotion scores or None
+        """
+        emotions = self.get_all_emotions(results)
+        if not emotions:
+            return None
+        
+        total = sum(emotions.values())
+        if total == 0:
+            return emotions
+        
+        return {emotion: score / total for emotion, score in emotions.items()}
+    
+    def get_emotion_vector(self, results: Dict) -> Optional[List[float]]:
+        """
+        Get emotion scores as a vector in the order of emotion_classes
+        
+        Args:
+            results: Emotion detection results
+            
+        Returns:
+            List of emotion scores in order of self.emotion_classes
+        """
+        emotions = self.get_all_emotions(results)
+        if not emotions or not self.emotion_classes:
+            return None
+        
+        return [emotions.get(emotion, 0.0) for emotion in self.emotion_classes]

@@ -19,26 +19,27 @@ from typing import Optional, Dict, Any, Tuple, List
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import all model types
-from models.hand.mediapipe import MediaPipeHandDetector
-from models.hand.yolo import YOLOHandDetector
+from src.models.hand.mediapipe import MediaPipeHandDetector
+from src.models.hand.yolo import YOLOHandDetector
 
-from models.pose.mediapipe import MediaPipePoseDetector
-from models.pose.yolo import YOLOPoseDetector
+from src.models.pose.mediapipe import MediaPipePoseDetector
+from src.models.pose.yolo import YOLOPoseDetector
 
-from models.facemesh.mediapipe import MediaPipeFaceMeshDetector
-from models.face.yolo import YOLOFaceDetector
+from src.models.facemesh.mediapipe import MediaPipeFaceMeshDetector
+from src.models.face.yolo import YOLOFaceDetector
 
 # Import bad gesture detection
 from src.bad_gesture_detection import BadGestureDetector
 
-from models.emotion.deepface import DeepFaceEmotionDetector
-from models.emotion.ghostfacenet import GhostFaceNetEmotionDetector
+from src.models.emotion.deepface import DeepFaceEmotionDetector
+from src.models.emotion.ghostfacenet import GhostFaceNetEmotionDetector
 
 # Import database
-from src.database.setup import MusicianDatabase, VideoAlignmentDatabase
+from src.database.database_setup_v2 import DatabaseManager, TranscriptVideo
+from src.database.setup import VideoAlignmentDatabase, ChunkVideoAlignmentDatabase
 
 # Import transcript model
-from models.transcript.whisper_realtime import WhisperRealtimeTranscriber
+from src.models.transcript.whisper_realtime import WhisperRealtimeTranscriber
 
 
 class DetectorV2:
@@ -58,6 +59,9 @@ class DetectorV2:
         self.start_time_offset = 0.0  # Retrieved from video_alignment_offsets table
         self.matching_duration = 0.0  # Retrieved from video_alignment_offsets table
         self.end_time_offset = None  # Calculated as start_time_offset + matching_duration
+
+        # Flag to control video processing scope
+        self.process_matching_duration_only = self.config.get('video', {}).get('process_matching_duration_only', True)
         
         # Statistics for report generation
         self.stats = {
@@ -92,12 +96,18 @@ class DetectorV2:
         self.transcript_segments_saved = False  # Track if segments are saved to DB
         self.transcript_segment_map = {}  # Map time ranges to segment IDs
         
-        # Initialize video alignment database
+        # Initialize video alignment databases
         self.alignment_db = None
+        self.chunk_alignment_db = None
         try:
             self.alignment_db = VideoAlignmentDatabase()
         except Exception as e:
             print(f"⚠️ VideoAlignmentDatabase connection failed: {e}")
+
+        try:
+            self.chunk_alignment_db = ChunkVideoAlignmentDatabase()
+        except Exception as e:
+            print(f"⚠️ ChunkVideoAlignmentDatabase connection failed: {e}")
         
         # Initialize models based on configuration
         self.hand_detector = self._init_hand_detector()
@@ -141,7 +151,7 @@ class DetectorV2:
         return {
             'database': {
                 'enabled': False,
-                'table_name': 'music_frame_analysis_1',
+                'table_name': 'musician_frame_analysis',
                 'batch_size': 50,
                 'batch_timeout': 5.0
             },
@@ -195,10 +205,17 @@ class DetectorV2:
             # Option 2: YOLO face detection + MediaPipe FaceMesh (similar to test_facemesh_yolo_mediapipe.py)
             face_confidence = self.config['detection'].get('face_confidence', 0.5)
             yolo_model_path = self.config['detection'].get('yolo_face_model_path', 'checkpoints/yolov8n-face.pt')
-            
+
+            # Convert to absolute path if relative
+            if not os.path.isabs(yolo_model_path):
+                # Get the project root directory
+                current_file = os.path.abspath(__file__)
+                project_root = os.path.dirname(os.path.dirname(current_file))
+                yolo_model_path = os.path.join(project_root, yolo_model_path)
+
             # Initialize both detectors
             yolo_detector = YOLOFaceDetector(
-                model_path=yolo_model_path,
+                model_path=yolo_model_path if os.path.exists(yolo_model_path) else None,
                 confidence=face_confidence
             )
             facemesh_detector = MediaPipeFaceMeshDetector(min_detection_confidence=confidence)
@@ -257,8 +274,9 @@ class DetectorV2:
     def _init_database(self):
         """Initialize database connection"""
         try:
-            table_name = self.config['database'].get('table_name', 'music_frame_analysis_1')
-            self.db = MusicianDatabase(table_name=table_name)
+            table_name = self.config['database'].get('table_name', 'musician_frame_analysis')
+            # Use DatabaseManager which supports both local and Supabase
+            self.db = DatabaseManager(config=self.config)
             
             # Configure batch settings
             self.db.batch_size = self.config['database'].get('batch_size', 50)
@@ -269,6 +287,85 @@ class DetectorV2:
             print(f"❌ Database initialization failed: {e}")
             self.db = None
     
+    def _get_hand_bbox_from_landmarks(self, hand_landmarks, image_shape):
+        """
+        Calculate precise bounding box from hand landmarks
+        Box covers all 21 hand landmarks (leftmost, rightmost, highest, lowest)
+
+        Args:
+            hand_landmarks: MediaPipe hand landmarks
+            image_shape: (height, width, channels) of the image
+
+        Returns:
+            Dictionary with bbox coordinates
+        """
+        if not hand_landmarks:
+            return None
+
+        height, width = image_shape[:2]
+
+        # MediaPipe hand landmark indices for key points
+        WRIST = 0
+        MIDDLE_FINGER_TIP = 12
+
+        # Extract x, y coordinates for all 21 landmarks
+        x_coords = []
+        y_coords = []
+
+        for landmark in hand_landmarks.landmark:
+            x_coords.append(landmark.x * width)
+            y_coords.append(landmark.y * height)
+
+        # Find actual boundaries from all 21 landmarks
+        # This ensures the box covers the entire hand regardless of orientation
+        x_min = min(x_coords)
+        x_max = max(x_coords)
+        y_min = min(y_coords)
+        y_max = max(y_coords)
+
+        # Add some padding (10% of bbox size)
+        width_padding = (x_max - x_min) * 0.1
+        height_padding = (y_max - y_min) * 0.1
+
+        # Calculate final bbox with padding
+        x1 = max(0, int(x_min - width_padding))
+        y1 = max(0, int(y_min - height_padding))
+        x2 = min(width, int(x_max + width_padding))
+        y2 = min(height, int(y_max + height_padding))
+
+        return {
+            'x': x1,
+            'y': y1,
+            'w': x2 - x1,
+            'h': y2 - y1,
+            'wrist_x': int(x_coords[WRIST]),
+            'wrist_y': int(y_coords[WRIST]),
+            'middle_tip_x': int(x_coords[MIDDLE_FINGER_TIP]),
+            'middle_tip_y': int(y_coords[MIDDLE_FINGER_TIP])
+        }
+
+    def _convert_landmarks_to_dict(self, hand_landmarks):
+        """
+        Convert MediaPipe hand landmarks to dictionary format
+
+        Args:
+            hand_landmarks: MediaPipe hand landmarks
+
+        Returns:
+            List of landmark dictionaries
+        """
+        if not hand_landmarks:
+            return None
+
+        landmarks_list = []
+        for landmark in hand_landmarks.landmark:
+            landmarks_list.append({
+                'x': landmark.x,
+                'y': landmark.y,
+                'z': landmark.z if hasattr(landmark, 'z') else 0
+            })
+        return landmarks_list
+
     def get_available_models(self) -> Dict[str, bool]:
         """Get status of all available models"""
         return {
@@ -284,10 +381,11 @@ class DetectorV2:
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
         Process a single frame through all models
-        
+        Detection order: 1) Two-stage hand detection, 2) Pose detection, 3) Face detection
+
         Args:
             frame: Input frame (BGR format)
-            
+
         Returns:
             Dictionary containing all detection results
         """
@@ -297,48 +395,81 @@ class DetectorV2:
             'processing_times': {}
         }
         
-        # Hand detection
+        # Hand detection FIRST (using two-stage detection for higher accuracy)
         if self.hand_detector:
             start_time = time.time()
-            hand_results = self.hand_detector.detect(frame)
-            left_hand, right_hand = self.hand_detector.convert_to_dict(hand_results)
-            results['left_hand_landmarks'] = left_hand
-            results['right_hand_landmarks'] = right_hand
-            results['hand_raw_results'] = hand_results  # Store raw results for drawing
-            
-            # Add hand_bboxes for YOLO models
-            hand_model_type = self.config['detection'].get('hand_model', 'none').lower()
-            if hand_model_type == 'yolo' and hand_results:
-                # Extract bounding boxes from YOLO results
-                hand_bboxes = []
-                try:
-                    for result in hand_results:
-                        if result.boxes is not None:
-                            boxes = result.boxes.xyxy.cpu().numpy()
-                            confidences = result.boxes.conf.cpu().numpy()
-                            for box, conf in zip(boxes, confidences):
-                                x1, y1, x2, y2 = box
-                                hand_bboxes.append({
-                                    'x1': float(x1), 'y1': float(y1), 
-                                    'x2': float(x2), 'y2': float(y2),
-                                    'confidence': float(conf)
-                                })
-                except Exception as e:
-                    print(f"⚠️ Error extracting hand bboxes: {e}")
-                    hand_bboxes = []
-                results['hand_bboxes'] = hand_bboxes
-            else:
-                results['hand_bboxes'] = None
-                
+            hand_landmarks = []
+            hand_raw_results = None
+            hand_bboxes = []
+
+            # Stage 1: Initial hand detection on full frame
+            hand_results_stage1 = self.hand_detector.detect(frame)
+
+            if hand_results_stage1 and hasattr(hand_results_stage1, 'multi_hand_landmarks') and hand_results_stage1.multi_hand_landmarks:
+                # Check two-stage config once outside the loop
+                use_two_stage_hand = self.config['detection'].get('use_two_stage_hand', True)
+                height, width = frame.shape[:2]
+
+                for hand_landmark_set in hand_results_stage1.multi_hand_landmarks:
+                    # Calculate precise bounding box from hand landmarks
+                    bbox = self._get_hand_bbox_from_landmarks(hand_landmark_set, frame.shape)
+
+                    if bbox:
+                        hand_bboxes.append(bbox)
+
+                        # Stage 2: Crop and re-detect for higher accuracy (optional, based on config)
+                        if use_two_stage_hand:
+                            x, y, w, h = bbox['x'], bbox['y'], bbox['w'], bbox['h']
+
+                            # Ensure valid crop region
+                            if w > 20 and h > 20:
+                                hand_crop = frame[y:y+h, x:x+w]
+
+                                # Re-detect on cropped region
+                                hand_results_stage2 = self.hand_detector.detect(hand_crop)
+
+                                if (hand_results_stage2 and
+                                    hasattr(hand_results_stage2, 'multi_hand_landmarks') and
+                                    hand_results_stage2.multi_hand_landmarks is not None):
+                                    # Use refined landmarks from stage 2
+                                    for refined_landmarks in hand_results_stage2.multi_hand_landmarks:
+                                        adjusted_landmarks = []
+                                        for landmark in refined_landmarks.landmark:
+                                            # Convert back to original frame coordinates
+                                            orig_x = landmark.x * w + x
+                                            orig_y = landmark.y * h + y
+                                            adjusted_landmarks.append({
+                                                'x': orig_x / width,
+                                                'y': orig_y / height,
+                                                'z': landmark.z if hasattr(landmark, 'z') else 0
+                                            })
+                                        if adjusted_landmarks:
+                                            hand_landmarks.append(adjusted_landmarks)
+                                else:
+                                    # Fall back to stage 1 landmarks if stage 2 fails
+                                    landmarks_dict = self._convert_landmarks_to_dict(hand_landmark_set)
+                                    if landmarks_dict:
+                                        hand_landmarks.append(landmarks_dict)
+                        else:
+                            # Use stage 1 landmarks directly if two-stage is disabled
+                            landmarks_dict = self._convert_landmarks_to_dict(hand_landmark_set)
+                            if landmarks_dict:
+                                hand_landmarks.append(landmarks_dict)
+
+                # Store raw results for visualization
+                hand_raw_results = hand_results_stage1
+
+            results['hand_landmarks'] = hand_landmarks
+            results['hand_raw_results'] = hand_raw_results
+            results['hand_bboxes'] = hand_bboxes if hand_bboxes else None
             results['processing_times']['hand'] = float(f"{(time.time() - start_time) * 1000:.3f}")
         else:
-            results['left_hand_landmarks'] = None
-            results['right_hand_landmarks'] = None
+            results['hand_landmarks'] = None
             results['hand_raw_results'] = None
             results['hand_bboxes'] = None
             results['processing_times']['hand'] = 0
-        
-        # Pose detection
+
+        # Pose detection (now independent of hand detection)
         if self.pose_detector:
             start_time = time.time()
             pose_results = self.pose_detector.detect(frame)
@@ -350,7 +481,8 @@ class DetectorV2:
             results['pose_landmarks'] = None
             results['pose_raw_results'] = None
             results['processing_times']['pose'] = 0
-        
+
+
         # Face detection
         if self.facemesh_detector:
             start_time = time.time()
@@ -454,22 +586,167 @@ class DetectorV2:
     
     def _get_alignment_data(self, video_file: str) -> tuple[float, float]:
         """
-        Retrieve start_time_offset and matching_duration from video_alignment_offsets table
-        
+        Retrieve start_time_offset and matching_duration using appropriate alignment method
+
+        Method Selection Logic:
+        - process_matching_duration_only = True (use_offset) → latest_start (synchronized content)
+        - process_matching_duration_only = False (full_frames) → earliest_start (full video)
+
+        Priority:
+        1. Check chunk_video_alignment_offsets table for appropriate method data
+        2. If not found, call shape_based_aligner_multi.py to generate data
+        3. Fall back to legacy video_alignment_offsets table
+
         Args:
             video_file: Video file name (e.g., "cam_1.mp4")
-            
+
         Returns:
             Tuple of (start_time_offset, matching_duration) in seconds
         """
+        print(f"🔍 Getting alignment data for: {video_file}")
+
+        # Determine which alignment method to use based on processing configuration
+        if self.process_matching_duration_only:
+            preferred_method = 'latest_start'
+            print(f"🎯 Using latest_start method for synchronized content processing")
+        else:
+            preferred_method = 'earliest_start'
+            print(f"🎬 Using earliest_start method for full frame processing")
+
+        # Step 1: Try to get preferred method data from chunk alignment table
+        if self.chunk_alignment_db:
+            try:
+                # Extract source name from video path
+                source_name = self._extract_source_name_from_path(video_file)
+
+                # Check for preferred method alignment data
+                chunk_data = self.chunk_alignment_db.get_chunk_alignments_by_source_and_method(
+                    source_name, preferred_method
+                )
+
+                if chunk_data:
+                    print(f"✅ Found {preferred_method} alignment data in database")
+                    return self._process_chunk_alignment_data(video_file, chunk_data)
+                else:
+                    print(f"⚠️ No {preferred_method} data found, calling aligner to generate it...")
+                    return self._generate_alignment_data(video_file, source_name, preferred_method)
+
+            except Exception as e:
+                print(f"❌ Error accessing chunk alignment data: {e}")
+
+        # Step 3: Fall back to legacy alignment data
+        print(f"🔄 Falling back to legacy alignment data...")
+        return self._get_legacy_alignment_data(video_file)
+
+    def _extract_source_name_from_path(self, video_file: str) -> str:
+        """Extract source name from video file path"""
+        # Extract source name from video path (e.g., vid_shot1)
+        path_parts = video_file.split('/')
+        for part in path_parts:
+            if part.startswith('vid_shot'):
+                return part
+
+        # Fallback: extract from directory structure
+        return os.path.basename(os.path.dirname(video_file))
+
+    def _process_chunk_alignment_data(self, video_file: str, chunk_data: list) -> tuple[float, float]:
+        """Process chunk alignment data to extract offset for this video"""
+        video_basename = os.path.basename(video_file)
+
+        # Find matching chunk data for this video
+        for chunk in chunk_data:
+            chunk_filename = chunk.get('chunk_filename', '')
+            if video_basename in chunk_filename or chunk_filename in video_basename:
+                offset = float(chunk.get('start_time_offset', 0.0))
+                duration = float(chunk.get('chunk_duration', 0.0))
+                print(f"📍 Found chunk data: offset={offset:.3f}s, duration={duration:.1f}s")
+                return offset, duration
+
+        print(f"⚠️ No matching chunk found for {video_basename}")
+        return 0.0, 0.0
+
+    def _generate_alignment_data(self, video_file: str, source_name: str, method_type: str) -> tuple[float, float]:
+        """Call shape_based_aligner_multi.py to generate alignment data with specified method"""
+        try:
+            # Import the aligner module
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from src.video_aligner.shape_based_aligner_multi import (
+                scan_and_group_chunk_videos,
+                determine_reference_camera_group_by_audio_pattern,
+                align_chunks_to_reference_timeline
+            )
+
+            # Get video directory
+            video_dir = os.path.dirname(video_file)
+
+            print(f"🎵 Running audio alignment analysis for {method_type} method...")
+
+            # Step 1: Scan and group videos
+            camera_groups = scan_and_group_chunk_videos(video_dir)
+            if not camera_groups:
+                print("❌ No camera groups found")
+                return 0.0, 0.0
+
+            # Step 2: Determine reference using method_type
+            # True = earliest_start, False = latest_start
+            use_earliest_start = (method_type == 'earliest_start')
+            reference_prefix = determine_reference_camera_group_by_audio_pattern(camera_groups, use_earliest_start)
+
+            # Step 3: Align chunks with specified method
+            camera_groups = align_chunks_to_reference_timeline(camera_groups, reference_prefix, use_earliest_start)
+
+            # Step 4: Store results in database with specified method_type
+            self._store_alignment_results(source_name, camera_groups, reference_prefix, method_type)
+
+            # Step 5: Extract data for current video
+            return self._process_chunk_alignment_data(video_file,
+                self.chunk_alignment_db.get_chunk_alignments_by_source_and_method(source_name, method_type))
+
+        except Exception as e:
+            print(f"❌ Error generating {method_type} alignment: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0.0, 0.0
+
+    def _store_alignment_results(self, source_name: str, camera_groups: dict, reference_prefix: str, method_type: str):
+        """Store alignment results in database"""
+        if not self.chunk_alignment_db:
+            return
+
+        # Check if chunk_video_alignment storage is enabled
+        if not self.config['database'].get('store_chunk_video_alignment', True):
+            return
+
+        try:
+            for prefix, group in camera_groups.items():
+                for chunk in group.chunks:
+                    # Get reference information
+                    reference_group = camera_groups[reference_prefix]
+                    reference_chunk = reference_group.chunks[0]
+
+                    success = self.chunk_alignment_db.insert_chunk_alignment(
+                        source=source_name,
+                        chunk_filename=chunk.filename,
+                        camera_prefix=prefix,
+                        chunk_order=chunk.chunk_number,
+                        start_time_offset=chunk.start_time_offset,
+                        chunk_duration=chunk.duration,
+                        reference_camera_prefix=reference_prefix,
+                        reference_chunk_filename=reference_chunk.filename,
+                        method_type=method_type
+                    )
+                    if success:
+                        print(f"✅ Stored {method_type} alignment for {chunk.filename}")
+        except Exception as e:
+            print(f"❌ Error storing {method_type} results: {e}")
+
+    def _get_legacy_alignment_data(self, video_file: str) -> tuple[float, float]:
+        """Get alignment data from legacy video_alignment_offsets table"""
         if not self.alignment_db:
             return 0.0, 0.0
-            
+
         try:
-            # Extract source name and camera type from video file
-            # For example: "cam_1.mp4" -> source="vid_shot1", camera_type=1
-            # We need to match this with the database records
-            
             # Extract camera number from filename
             video_basename = os.path.basename(video_file)
             camera_type = 1  # Default
@@ -543,25 +820,42 @@ class DetectorV2:
     def save_to_database(self, results: Dict[str, Any], video_file: str = None):
         """
         Save processing results to database using batch insert
-        
+
         Args:
             results: Processing results from process_frame
             video_file: Name of the video file being processed
         """
+        # Check if database is enabled
+        if not self.config['database'].get('enabled', False):
+            return
+
         if not self.db:
             return
         
         try:
-            # Calculate proper timing values considering video alignment
+            # Calculate proper timing values based on processing mode
             original_time = results['frame_number'] / 30.0  # Assuming 30 fps
-            synced_time = self.start_time_offset + original_time
+
+            if self.process_matching_duration_only:
+                # In matching duration mode: frame_number starts from the seeked position
+                # So the actual video time is start_time_offset + original_time
+                # And synced_time = actual_time - start_time_offset = original_time
+                synced_time = original_time
+            else:
+                # In whole video mode: frame_number starts from 0 (beginning of video)
+                # So synced_time needs to account for the offset to align with other videos
+                synced_time = original_time - self.start_time_offset
             
             # Get transcript segment ID for this frame
             transcript_segment_id = None
-            
+
             if self.transcript_data and self.config['database'].get('link_frame_to_transcript', True):
                 transcript_segment_id = self._get_transcript_segment_id(synced_time)
-            
+
+            # Check if musician_frame_analysis storage is enabled
+            if not self.config['database'].get('store_musician_frame_analysis', True):
+                return  # Skip saving frame data if disabled
+
             # Add frame to batch
             self.db.add_frame_to_batch(
                 session_id=self.session_id,
@@ -594,20 +888,24 @@ class DetectorV2:
         """Save transcript segments to transcript_video table"""
         if not self.db or not self.transcript_data:
             return
-        
+
+        # Check if transcript_video storage is enabled
+        if not self.config['database'].get('store_transcript_video', True):
+            return
+
         save_segments = self.config['database'].get('save_transcript_segments', True)
         if not save_segments:
             return
-        
+
         try:
             print("💾 Saving transcript segments to database...")
-            
+
             # Get current video file name
             video_file = os.path.basename(self.video_path_for_transcript) if self.video_path_for_transcript else "unknown"
-            
+
             for i, segment in enumerate(self.transcript_data):
-                # Insert segment into transcript_video table
-                result = self.db.supabase.table('transcript_video').insert({
+                # Prepare transcript data
+                transcript_data = {
                     'video_file': video_file,
                     'session_id': self.session_id,
                     'segment_id': i,
@@ -620,17 +918,34 @@ class DetectorV2:
                     'model_size': self.config['detection'].get('transcript_settings', {}).get('model_size', 'tiny'),
                     'chunk_duration': self.config['detection'].get('transcript_settings', {}).get('chunk_duration', 15.0),
                     'words_json': segment.get('words', [])
-                }).execute()
-                
-                # Store segment ID for frame reference
-                if result.data and len(result.data) > 0:
-                    segment_db_id = result.data[0]['id']
-                    # Map time range to database ID
-                    self.transcript_segment_map[(segment['start'], segment['end'])] = segment_db_id
-                    
+                }
+
+                # Insert segment based on database type
+                if self.db.use_local:
+                    # Local PostgreSQL - use SQLAlchemy
+                    session = self.db.get_session()
+                    try:
+                        transcript_entry = TranscriptVideo(**transcript_data)
+                        session.add(transcript_entry)
+                        session.commit()
+                        segment_db_id = transcript_entry.id
+                        # Map time range to database ID
+                        self.transcript_segment_map[(segment['start'], segment['end'])] = segment_db_id
+                    finally:
+                        session.close()
+                else:
+                    # Supabase - use supabase client
+                    result = self.db.supabase.table('transcript_video').insert(transcript_data).execute()
+
+                    # Store segment ID for frame reference
+                    if result.data and len(result.data) > 0:
+                        segment_db_id = result.data[0]['id']
+                        # Map time range to database ID
+                        self.transcript_segment_map[(segment['start'], segment['end'])] = segment_db_id
+
             self.transcript_segments_saved = True
             print(f"✅ Saved {len(self.transcript_data)} transcript segments to database")
-            
+
         except Exception as e:
             print(f"❌ Error saving transcript segments: {e}")
             import traceback
@@ -640,13 +955,96 @@ class DetectorV2:
         """Get the database ID of transcript segment for given time"""
         if not self.transcript_segments_saved:
             return None
-            
+
         for (start_time, end_time), segment_id in self.transcript_segment_map.items():
             if start_time <= current_time <= end_time:
                 return segment_id
-                
+
         return None
-    
+
+    def _load_existing_transcripts(self, video_file: str) -> bool:
+        """
+        Load existing transcript segments from database for the given video file
+
+        Args:
+            video_file: Name of the video file to query
+
+        Returns:
+            True if existing transcripts found and loaded, False otherwise
+        """
+        if not self.db:
+            return False
+
+        try:
+            print(f"🔍 Checking for existing transcripts for: {video_file}")
+
+            if self.db.use_local:
+                # Local PostgreSQL - use SQLAlchemy
+                session = self.db.get_session()
+                try:
+                    records = session.query(TranscriptVideo).filter(
+                        TranscriptVideo.video_file == video_file
+                    ).order_by(TranscriptVideo.start_time).all()
+
+                    if records:
+                        print(f"✅ Found {len(records)} existing transcript segments in database")
+
+                        # Convert to transcript_data format
+                        self.transcript_data = []
+                        for record in records:
+                            segment = {
+                                'start': float(record.start_time),
+                                'end': float(record.end_time),
+                                'text': record.text,
+                                'words': record.words_json if record.words_json else []
+                            }
+                            self.transcript_data.append(segment)
+
+                            # Map segment to database ID
+                            self.transcript_segment_map[(segment['start'], segment['end'])] = record.id
+
+                        self.transcript_segments_saved = True
+                        print(f"✅ Loaded {len(self.transcript_data)} transcript segments from database")
+                        return True
+
+                finally:
+                    session.close()
+            else:
+                # Supabase
+                result = self.db.supabase.table('transcript_video').select('*').eq(
+                    'video_file', video_file
+                ).order('start_time').execute()
+
+                if result.data and len(result.data) > 0:
+                    print(f"✅ Found {len(result.data)} existing transcript segments in database")
+
+                    # Convert to transcript_data format
+                    self.transcript_data = []
+                    for record in result.data:
+                        segment = {
+                            'start': float(record['start_time']),
+                            'end': float(record['end_time']),
+                            'text': record['text'],
+                            'words': record.get('words_json', [])
+                        }
+                        self.transcript_data.append(segment)
+
+                        # Map segment to database ID
+                        self.transcript_segment_map[(segment['start'], segment['end'])] = record['id']
+
+                    self.transcript_segments_saved = True
+                    print(f"✅ Loaded {len(self.transcript_data)} transcript segments from database")
+                    return True
+
+            print(f"ℹ️  No existing transcripts found for {video_file}")
+            return False
+
+        except Exception as e:
+            print(f"⚠️  Error loading existing transcripts: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def _combine_video_with_audio(self) -> bool:
         """
         Combine the processed video with original audio using ffmpeg
@@ -835,6 +1233,33 @@ PERFORMANCE METRICS:
         # Draw hand landmarks using model's draw_landmarks method
         if self.hand_detector and results.get('hand_raw_results'):
             annotated_frame = self.hand_detector.draw_landmarks(annotated_frame, results['hand_raw_results'])
+
+        # Draw hand bounding boxes if available (from two-stage detection)
+        if results.get('hand_bboxes'):
+            for i, bbox in enumerate(results['hand_bboxes']):
+                x, y, w, h = bbox['x'], bbox['y'], bbox['w'], bbox['h']
+                wrist_x, wrist_y = bbox['wrist_x'], bbox['wrist_y']
+                middle_tip_x, middle_tip_y = bbox['middle_tip_x'], bbox['middle_tip_y']
+
+                # Draw bounding box with different colors for each hand
+                color = (0, 255, 0) if i == 0 else (255, 0, 0)  # Green for first hand, Blue for second
+                cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, 2)
+
+                # Add label
+                label = f"Hand {i+1}"
+                cv2.putText(annotated_frame, label, (x, y - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+                # Draw key points
+                # Draw wrist point (blue)
+                cv2.circle(annotated_frame, (wrist_x, wrist_y), 5, (255, 0, 0), -1)
+                cv2.putText(annotated_frame, "W", (wrist_x + 7, wrist_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 0), 1)
+
+                # Draw middle finger tip (red)
+                cv2.circle(annotated_frame, (middle_tip_x, middle_tip_y), 5, (0, 0, 255), -1)
+                cv2.putText(annotated_frame, "M", (middle_tip_x + 7, middle_tip_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
         
         # Draw pose landmarks using model's draw_landmarks method
         if self.pose_detector and results.get('pose_raw_results'):
@@ -1000,24 +1425,44 @@ PERFORMANCE METRICS:
         """Start transcript processing in background"""
         if not self.transcript_detector:
             return
-        
+
         self.video_path_for_transcript = video_path
-        
+
         try:
-            # Process entire video file for transcript in background
+            # Get video filename for database lookup
+            video_file = os.path.basename(video_path)
+
+            # Check if transcripts already exist in database
+            if self.db and self.config['database'].get('enabled', False):
+                print(f"🔍 Checking for existing transcripts in database...")
+                if self._load_existing_transcripts(video_file):
+                    print(f"✅ Using existing transcripts from database (skipping re-processing)")
+                    print(f"   📊 {len(self.transcript_data)} segments loaded")
+                    return
+
+            # No existing transcripts found, process the video
             chunk_duration = self.config['detection'].get('transcript_settings', {}).get('chunk_duration', 15.0)
-            
+
             # Process transcript directly in main thread for simplicity and reliability
             try:
                 print(f"🎤 Starting transcript processing for: {video_path}")
-                print(f"🎤 Using video alignment: start_offset={self.start_time_offset:.3f}s, end_offset={self.end_time_offset}")
 
-                results = self.transcript_detector.transcribe_video_file(
-                    video_path,
-                    chunk_duration=chunk_duration,
-                    start_time_offset=self.start_time_offset,
-                    end_time_offset=self.end_time_offset
-                )
+                if self.process_matching_duration_only:
+                    print(f"🎤 Using video alignment: start_offset={self.start_time_offset:.3f}s, end_offset={self.end_time_offset}")
+                    results = self.transcript_detector.transcribe_video_file(
+                        video_path,
+                        chunk_duration=chunk_duration,
+                        start_time_offset=self.start_time_offset,
+                        end_time_offset=self.end_time_offset
+                    )
+                else:
+                    print(f"🎤 Processing transcript for entire video (no time limits)")
+                    results = self.transcript_detector.transcribe_video_file(
+                        video_path,
+                        chunk_duration=chunk_duration,
+                        start_time_offset=0.0,
+                        end_time_offset=None
+                    )
 
                 # Build transcript timeline from results
                 if results:
@@ -1207,7 +1652,9 @@ PERFORMANCE METRICS:
                 self.preserve_audio = False
         
         # Retrieve alignment data from database before starting
-        self.start_time_offset, self.matching_duration = self._get_alignment_data(video_file)
+        # But preserve duration limiting settings if they were explicitly set
+        if not (hasattr(self, 'matching_duration') and self.matching_duration > 0 and self.process_matching_duration_only):
+            self.start_time_offset, self.matching_duration = self._get_alignment_data(video_file)
         print(f"⏰ Start time offset: {self.start_time_offset:.3f}s")
         print(f"⏱️ Matching duration: {self.matching_duration:.1f}s")
         
@@ -1219,21 +1666,25 @@ PERFORMANCE METRICS:
             self._start_transcript_processing(transcript_video_path)
             print(f"🎤 Transcript will be synced with video alignment: offset={self.start_time_offset:.3f}s, duration={self.matching_duration:.1f}s")
         
-        # Seek to start_time_offset position if we have alignment data
-        if self.start_time_offset > 0:
+        # Conditionally seek to start_time_offset position based on processing mode
+        if self.process_matching_duration_only and self.start_time_offset > 0:
             seek_position_ms = self.start_time_offset * 1000  # Convert seconds to milliseconds
             success = cap.set(cv2.CAP_PROP_POS_MSEC, seek_position_ms)
             if success:
-                print(f"✅ Seeked to position: {self.start_time_offset:.3f}s")
+                print(f"✅ Seeked to position: {self.start_time_offset:.3f}s (matching duration mode)")
             else:
                 print(f"⚠️ Failed to seek to position: {self.start_time_offset:.3f}s")
+        elif not self.process_matching_duration_only:
+            print(f"📹 Processing entire video from beginning (whole video mode)")
         
-        # Calculate end time for processing (start_time_offset + matching_duration)
-        if self.matching_duration > 0:
+        # Calculate end time for processing based on mode
+        if self.process_matching_duration_only and self.matching_duration > 0:
             self.end_time_offset = self.start_time_offset + self.matching_duration
-            print(f"🏁 Processing will end at: {self.end_time_offset:.1f}s")
+            print(f"🏁 Processing will end at: {self.end_time_offset:.1f}s (matching duration mode)")
         else:
             self.end_time_offset = None  # Process entire video
+            if not self.process_matching_duration_only:
+                print(f"🏁 Processing entire video (whole video mode)")
         
         print("Press 'q' to quit, 'p' to pause/resume")
         

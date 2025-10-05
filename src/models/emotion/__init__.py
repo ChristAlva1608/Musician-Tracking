@@ -4,13 +4,11 @@ Emotion Detection Models Package
 """
 
 from .base_emotion_detector import BaseEmotionDetector
-from .deepface_detector import DeepFaceDetector
-from .ghostfacenet_detector import GhostFaceNetDetector
-from .fer_detector import FERDetector
+from .deepface import DeepFaceEmotionDetector
+from .ghostfacenet import GhostFaceNetEmotionDetector
 
 __all__ = [
     'BaseEmotionDetector',
-    'DeepFaceDetector', 
-    'GhostFaceNetDetector',
-    'FERDetector'
+    'DeepFaceEmotionDetector', 
+    'GhostFaceNetEmotionDetector'
 ]

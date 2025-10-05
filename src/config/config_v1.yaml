@@ -1,116 +1,151 @@
-# Configuration file for Musician Tracking System
-
-# Database settings
+bad_gestures:
+  detect_fingers_pointing_up: true
+  detect_hunched_back: true
+  detect_low_wrists: true
+  detect_turtle_neck: true
+  thresholds:
+    finger_pointing_threshold: 0.8
+    hunched_back_angle: 20
+    low_wrist_threshold: 0.1
+    turtle_neck_angle: 30
 database:
-  enabled: false
-  table_name: "musician_frame_analysis_1"
   batch_size: 50
-  batch_timeout: 5.0
-  
-  # Transcript storage configuration
-  save_transcript_segments: true      # Save transcript segments to transcript_video table
-  link_frame_to_transcript: true     # Add transcript_segment_id reference to frame table
-
-# Video processing settings
-video:
-  # Single video processing (for detect.py)
-  source_path: "/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/original_video/cam_1.mp4"  # Path to video file or 0 for webcam
-  use_webcam: false  # Set to true to use webcam instead of video file
-  skip_frames: 0  # 0 = process all frames, 1 = every other frame, 2 = every third frame, etc.
-  display_output: true
-  
-  # Output video settings
-  save_output_video: true  # Save annotated video with detection results
-  output_video_path: "output/original_video_cam_1_sk_0.mp4"  # Path to save the output video
-  output_format: "mp4"  # Video format
-  preserve_audio: true  # Preserve original audio in output video
-  temp_video_path: "output/temp_video_no_audio.mp4"  # Temporary video without audio
-  
-  # Report generation settings
-  generate_report: true  # Generate processing report
-  report_path: "src/analysis/detection_report.txt"  # Path to save the report
-  
-  # Multi-video alignment (for shape_based_aligner_multi.py)
-  alignment_directory: "/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/original video"  # Directory containing videos to align
-  
-# Detection models configuration
+  batch_timeout: 5
+  enabled: true
+  link_frame_to_transcript: true
+  save_transcript_segments: true
+  store_chunk_video_alignment: true
+  store_musician_frame_analysis: true
+  store_processing_jobs: true
+  store_transcript_video: true
+  table_name: musician_frame_analysis
+  # Database type: 'local' for local PostgreSQL, 'supabase' for Supabase
+  use_database_type: local
+  # Supabase Configuration
+  supabase:
+    url: 'https://zjrpvldbweqilzqxwfpi.supabase.co'
+    anon_key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqcnB2bGRid2VxaWx6cXh3ZnBpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ2NjgzNjIsImV4cCI6MjA3MDI0NDM2Mn0.qDw7MxugzaWllJsAZUytCHvLIRCvn2gTtR06gLmoiDk'
+  # Local PostgreSQL Configuration
+  local:
+    host: localhost
+    port: 5432
+    name: musician-tracking
+    user: christalva
+    password: ''
 detection:
-  # Hand detection model
-  hand_model: none  # Options: "mediapipe", "yolo"
-  hand_confidence: 0.5
-  
-  # Pose detection model  
-  pose_model: mediapipe  # Options: "mediapipe", "yolo"
-  pose_confidence: 0.5
-  
-  # Face mesh detection model
-  facemesh_model: none  # Options: "mediapipe", "yolo+mediapipe", "yolo", "none"
-  facemesh_confidence: 0.5
-  face_confidence: 0.5
-  yolo_face_model_path: "checkpoints/yolov8n-face.pt"
-  
-  # Emotion detection model
-  emotion_model: none  # Options: "deepface", "ghostfacenet", "fer", "mediapipe", "none"
-  
-  # Transcript model
-  transcript_model: whisper  # Options: "whisper", "none"
-  transcript_settings:
-    model_size: "tiny"  # Options: "tiny", "base", "small", "medium", "large"
-    language: "en"  # Language code or "auto" for auto-detection
-    enabled: true  # Enable transcript processing
-    chunk_duration: 15.0  # Process audio in chunks of this duration (seconds)
-  
+  use_two_stage_hand: false  # Use two-stage hand detection for higher accuracy
+  emotion_model: none
   emotion_settings:
-    # DeepFace specific settings
     deepface:
-      model_name: "Facenet"  # Options: "VGG-Face", "Facenet", "Facenet512", "OpenFace", "DeepFace", "DeepID", "ArcFace", "Dlib", "SFace"
-      detector_backend: "retinaface"  # Options: "opencv", "ssd", "dlib", "mtcnn", "retinaface", "mediapipe"
+      detector_backend: retinaface
       enforce_detection: false
-      
-    # GhostFaceNet specific settings
-    ghostfacenet:
-      model_version: "v2"
-      batch_size: 32
-      
-    # FER specific settings
+      model_name: Facenet
     fer:
-      use_mtcnn: true  # Use MTCNN for face detection
       min_face_size: 40
-      
-    # MediaPipe emotion settings (if using MediaPipe for emotion)
+      use_mtcnn: true
+    ghostfacenet:
+      batch_size: 32
+      model_version: v2
     mediapipe:
       min_detection_confidence: 0.5
       min_tracking_confidence: 0.5
-
-# Bad gesture detection settings
-bad_gestures:
-  detect_low_wrists: true
-  detect_turtle_neck: true
-  detect_hunched_back: true
-  detect_fingers_pointing_up: true
-  
-  # Thresholds for bad gesture detection
-  thresholds:
-    low_wrist_threshold: 0.1  # Relative to elbow position
-    turtle_neck_angle: 30  # Degrees from vertical
-    hunched_back_angle: 20  # Degrees from vertical
-    finger_pointing_threshold: 0.8  # Confidence threshold
-
-# Heatmap settings
+  face_confidence: 0.5
+  facemesh_confidence: 0.5
+  facemesh_model: yolo+mediapipe
+  hand_confidence: 0.5
+  hand_model: mediapipe
+  pose_confidence: 0.5
+  pose_model: mediapipe
+  transcript_model: whisper
+  transcript_settings:
+    chunk_duration: 15
+    enabled: true
+    language: en
+    model_size: tiny
+  yolo_face_model_path: src/checkpoints/yolov8n-face.pt
 heatmap:
   enabled: false
-  resolution: [640, 480]
   gaussian_sigma: 10
-  update_interval: 5  # Update heatmap every N frames
-  
-# Logging settings
+  resolution:
+  - 640
+  - 480
+  update_interval: 5
+integrated_processor:
+  aligned_videos_dir: src/output/aligned_videos
+  alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician Tracking/src/video/multi-cam
+    video/vid_shot1/chunk_video
+  check_existing_alignment: true
+  create_aligned_videos: true
+  detection_output_format: mp4
+  detection_videos_dir: src/output/annotated_detection_videos
+  detector_config:
+    database:
+      enabled: true
+    display_output: false
+    video:
+      generate_report: true
+      preserve_audio: true
+      process_matching_duration_only: true
+      save_output_video: true
+      use_webcam: false
+  limit_processing_duration: false
+  max_processing_duration: 10
+  preserve_original_audio: true
+  processing_type: full_frames
+  run_detection: true
+  unified_video_config:
+    add_camera_labels: true
+    background_color:
+    - 0
+    - 0
+    - 0
+    freeze_frame_behavior: true
+    label_color:
+    - 255
+    - 255
+    - 255
+    label_font_scale: 1
+    output_filename: unified_detection_output.mp4
+    stack_direction: vertical
+  unified_videos: true
+  unified_videos_dir: src/output/unified_videos
 logging:
-  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  level: INFO
+  log_file: tracking.log
   save_to_file: true
-  log_file: "tracking.log"
-  
-# Performance settings
 performance:
-  max_workers: 4  # Number of parallel workers for processing
-  buffer_size: 100  # Frame buffer size
-  gpu_enabled: true  # Use GPU if available
+  buffer_size: 100
+  gpu_enabled: true
+  max_workers: 4
+video:
+  display_output: true
+  generate_report: true
+  output_format: mp4
+  output_video_path: src/output/original_video_cam_1_sk_0.mp4
+  preserve_audio: true
+  process_matching_duration_only: true
+  report_path: src/analysis/detection_report.txt
+  save_output_video: true
+  skip_frames: 0
+  source_path: /Volumes/Extreme_Pro/Mitou Project/Musician Tracking/src/video/multi-cam
+    video/vid_shot1/original_video/cam_1.mp4
+  temp_video_path: src/output/temp_video_no_audio.mp4
+  use_webcam: false
+video_aligner:
+  alignment:
+    correlation_threshold: 0.3
+    enable_chunk_processing: true
+    max_offset_search: 60
+    reference_strategy: earliest_start
+  alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician Tracking/src/video/multi-cam
+    video/vid_shot1/original_video
+  audio:
+    extraction_duration: 120
+    sample_rate: 22050
+    window_ms: 100
+  chunk_processing:
+    chunk_gap_threshold: 60
+    combine_chunks: true
+    gap_frame_repeat_duration: 1
+  output_video_path: src/output/original_video.mp4
+  save_output_videos: true
