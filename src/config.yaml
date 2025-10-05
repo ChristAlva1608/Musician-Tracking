@@ -1,0 +1,95 @@
+# Configuration file for Musician Tracking System
+
+# Database settings
+database:
+  enabled: true
+  connection:
+    host: "your-supabase-host"
+    database: "postgres"
+    user: "postgres"
+    password: "your-password"
+    port: 5432
+
+# Video processing settings
+video:
+  # Single video processing (for detect.py)
+  source_path: "/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/vid_shot1_cam_1.mp4"  # Path to video file or 0 for webcam
+  use_webcam: false  # Set to true to use webcam instead of video file
+  skip_frames: 1  # 0 = process all frames, 1 = every other frame, 2 = every third frame, etc.
+  display_output: true
+  save_output: false
+  output_format: "mp4"
+  
+  # Multi-video alignment (for shape_based_aligner_multi.py)
+  alignment_directory: "/Volumes/Extreme_Pro/Mitou Project/Musician Tracking/video/multi-cam video/vid_shot1/"  # Directory containing videos to align
+  
+# Detection models configuration
+detection:
+  # Hand detection model
+  hand_model: "mediapipe"  # Options: "mediapipe", "yolo"
+  hand_confidence: 0.5
+  
+  # Pose detection model  
+  pose_model: "mediapipe"  # Options: "mediapipe", "yolo"
+  pose_confidence: 0.5
+  
+  # Face mesh detection model
+  facemesh_model: "mediapipe"  # Options: "mediapipe", "yolo", "none"
+  facemesh_confidence: 0.5
+  
+  # Emotion detection model
+  emotion_model: "none"  # Options: "deepface", "ghostfacenet", "fer", "mediapipe", "none"
+  emotion_settings:
+    # DeepFace specific settings
+    deepface:
+      model_name: "Facenet"  # Options: "VGG-Face", "Facenet", "Facenet512", "OpenFace", "DeepFace", "DeepID", "ArcFace", "Dlib", "SFace"
+      detector_backend: "retinaface"  # Options: "opencv", "ssd", "dlib", "mtcnn", "retinaface", "mediapipe"
+      enforce_detection: false
+      
+    # GhostFaceNet specific settings
+    ghostfacenet:
+      model_version: "v2"
+      batch_size: 32
+      
+    # FER specific settings
+    fer:
+      use_mtcnn: true  # Use MTCNN for face detection
+      min_face_size: 40
+      
+    # MediaPipe emotion settings (if using MediaPipe for emotion)
+    mediapipe:
+      min_detection_confidence: 0.5
+      min_tracking_confidence: 0.5
+
+# Bad gesture detection settings
+bad_gestures:
+  detect_low_wrists: true
+  detect_turtle_neck: true
+  detect_hunched_back: true
+  detect_fingers_pointing_up: true
+  
+  # Thresholds for bad gesture detection
+  thresholds:
+    low_wrist_threshold: 0.1  # Relative to elbow position
+    turtle_neck_angle: 30  # Degrees from vertical
+    hunched_back_angle: 20  # Degrees from vertical
+    finger_pointing_threshold: 0.8  # Confidence threshold
+
+# Heatmap settings
+heatmap:
+  enabled: true
+  resolution: [640, 480]
+  gaussian_sigma: 10
+  update_interval: 5  # Update heatmap every N frames
+  
+# Logging settings
+logging:
+  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  save_to_file: true
+  log_file: "tracking.log"
+  
+# Performance settings
+performance:
+  max_workers: 4  # Number of parallel workers for processing
+  buffer_size: 100  # Frame buffer size
+  gpu_enabled: true  # Use GPU if available
