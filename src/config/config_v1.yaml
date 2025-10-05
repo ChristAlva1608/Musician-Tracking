@@ -24,7 +24,7 @@ database:
   # Supabase Configuration
   supabase:
     url: 'https://zjrpvldbweqilzqxwfpi.supabase.co'
-    anon_key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqcnB2bGRid2VxaWx6cXh3ZnBpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ2NjgzNjIsImV4cCI6MjA3MDI0NDM2Mn0.qDw7MxugzaWllJsAZUytCHvLIRCvn2gTtR06gLmoiDk'
+    anon_key:
   # Local PostgreSQL Configuration
   local:
     host: localhost
