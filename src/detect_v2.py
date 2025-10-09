@@ -28,8 +28,8 @@ from src.models.pose.yolo import YOLOPoseDetector
 from src.models.facemesh.mediapipe import MediaPipeFaceMeshDetector
 from src.models.face.yolo import YOLOFaceDetector
 
-# Import bad gesture detection
-from src.bad_gesture_detection import BadGestureDetector
+# Import bad gesture detection (3D version uses MediaPipe x,y,z)
+from src.bad_gesture_detection_3d import BadGestureDetector3D
 
 from src.models.emotion.deepface import DeepFaceEmotionDetector
 from src.models.emotion.ghostfacenet import GhostFaceNetEmotionDetector
@@ -246,9 +246,9 @@ class DetectorV2:
             return None
     
     def _init_bad_gesture_detector(self):
-        """Initialize bad gesture detector based on config"""
+        """Initialize enhanced 3D bad gesture detector based on config"""
         bad_gesture_config = self.config.get('bad_gestures', {})
-        return BadGestureDetector(config=bad_gesture_config)
+        return BadGestureDetector3D(config=bad_gesture_config)
     
     def _init_transcript_detector(self):
         """Initialize transcript detector based on config"""
@@ -554,17 +554,25 @@ class DetectorV2:
         # Bad gesture detection
         if self.bad_gesture_detector:
             start_time = time.time()
-            
-            # Convert hand landmarks from dict format back to MediaPipe format for gesture detection
-            hand_landmarks = None
+
+            # Extract 3D world landmarks for gesture detection
+            hand_landmarks_3d = None
+            pose_landmarks_3d = None
+
+            # Extract hand 3D world landmarks
             if results['hand_raw_results'] and self.config['detection'].get('hand_model', 'none').lower() == 'mediapipe':
-                # For MediaPipe hand model, hand_raw_results contains MediaPipe results directly
-                hand_landmarks = results['hand_raw_results'].multi_hand_landmarks if hasattr(results['hand_raw_results'], 'multi_hand_landmarks') else None
-            
+                # For MediaPipe hand model, extract 3D world landmarks
+                hand_landmarks_3d = results['hand_raw_results'].multi_hand_world_landmarks if hasattr(results['hand_raw_results'], 'multi_hand_world_landmarks') else None
+
+            # Extract pose 3D world landmarks
+            if results['pose_raw_results'] and self.config['detection'].get('pose_model', 'none').lower() == 'mediapipe':
+                # For MediaPipe pose model, extract 3D world landmarks
+                pose_landmarks_3d = results['pose_raw_results'].pose_world_landmarks if hasattr(results['pose_raw_results'], 'pose_world_landmarks') else None
+
             bad_gestures = self.bad_gesture_detector.detect_all_gestures(
                 frame=frame,
-                hand_landmarks=hand_landmarks,
-                pose_results=results['pose_raw_results']
+                hand_landmarks=hand_landmarks_3d,
+                pose_landmarks=pose_landmarks_3d
             )
             
             results['bad_gestures'] = bad_gestures
