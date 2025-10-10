@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Musician Tracking Detection System V2
+Musician Tracking Detection System V2 - 3D Bad Gesture Detection
 Modular implementation with configurable model selection
+Uses 3D world landmarks for bad gesture analysis
 """
 
 import cv2
@@ -28,8 +29,8 @@ from src.models.pose.yolo import YOLOPoseDetector
 from src.models.facemesh.mediapipe import MediaPipeFaceMeshDetector
 from src.models.face.yolo import YOLOFaceDetector
 
-# Import bad gesture detection (3D version uses MediaPipe x,y,z)
-from src.bad_gesture_detection_3d import BadGestureDetector3D
+# Import bad gesture detection (3D version uses MediaPipe x,y,z world coordinates)
+from src.bad_gesture.detector_3d import BadGestureDetector3D
 
 from src.models.emotion.deepface import DeepFaceEmotionDetector
 from src.models.emotion.ghostfacenet import GhostFaceNetEmotionDetector
