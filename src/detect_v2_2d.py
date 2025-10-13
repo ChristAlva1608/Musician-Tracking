@@ -63,7 +63,11 @@ class DetectorV2:
 
         # Flag to control video processing scope
         self.process_matching_duration_only = self.config.get('video', {}).get('process_matching_duration_only', True)
-        
+
+        # Processing type: determines synced_time calculation
+        # Can be set by integrated_video_processor or read from config
+        self.processing_type = self.config.get('video', {}).get('processing_type', 'use_offset')
+
         # Statistics for report generation
         self.stats = {
             'total_frames': 0,
@@ -842,18 +846,22 @@ class DetectorV2:
             return
         
         try:
-            # Calculate proper timing values based on processing mode
-            original_time = results['frame_number'] / 30.0  # Assuming 30 fps
+            # Calculate proper timing values based on processing type
+            frame_time = results['frame_number'] / 30.0  # Time since processing started (assuming 30 fps)
 
-            if self.process_matching_duration_only:
-                # In matching duration mode: frame_number starts from the seeked position
-                # So the actual video time is start_time_offset + original_time
-                # And synced_time = actual_time - start_time_offset = original_time
-                synced_time = original_time
-            else:
-                # In whole video mode: frame_number starts from 0 (beginning of video)
-                # So synced_time needs to account for the offset to align with other videos
+            # Synced time calculation based on processing_type
+            if self.processing_type == "full_frames":
+                # Full frames mode: frame_number starts from 0 (beginning of video)
+                # original_time is the absolute time in the video file
+                original_time = frame_time
+                # Need to subtract offset to sync with other cameras
                 synced_time = original_time - self.start_time_offset
+            else:  # use_offset
+                # Use offset mode: video is seeked to start_time_offset
+                # original_time should reflect absolute position in video file
+                original_time = self.start_time_offset + frame_time
+                # synced_time starts from 0 for all cameras at sync point
+                synced_time = frame_time
             
             # Get transcript segment ID for this frame
             transcript_segment_id = None
@@ -971,21 +979,48 @@ class DetectorV2:
 
         return None
 
-    def _load_existing_transcripts(self, video_file: str) -> bool:
+    def _load_existing_transcripts(self, video_file: str, video_path: str) -> bool:
         """
-        Load existing transcript segments from database for the given video file
+        Load existing transcript segments from database for the given video file.
+        Validates that transcript coverage is complete for the entire video duration
+        by checking if the maximum end_time covers the video duration.
 
         Args:
             video_file: Name of the video file to query
+            video_path: Full path to the video file (for duration calculation)
 
         Returns:
-            True if existing transcripts found and loaded, False otherwise
+            True if existing transcripts found, validated, and loaded; False otherwise
         """
         if not self.db:
             return False
 
         try:
             print(f"🔍 Checking for existing transcripts for: {video_file}")
+
+            # Calculate video duration for time coverage validation
+            import cv2
+
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                print(f"⚠️  Unable to open video to calculate duration, skipping validation")
+                return False
+
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+
+            if fps == 0 or total_frames == 0:
+                print(f"⚠️  Unable to determine video duration (fps={fps}, frames={total_frames})")
+                return False
+
+            video_duration = total_frames / fps
+
+            # Tolerance for coverage validation (allow small difference at end)
+            validation_tolerance = self.config['detection'].get('transcript_settings', {}).get('validation_tolerance', 2.0)
+
+            print(f"📹 Video duration: {video_duration:.2f}s")
+            print(f"📊 Validation tolerance: {validation_tolerance:.1f}s")
 
             if self.db.use_local:
                 # Local PostgreSQL - use SQLAlchemy
@@ -995,10 +1030,31 @@ class DetectorV2:
                         TranscriptVideo.video_file == video_file
                     ).order_by(TranscriptVideo.start_time).all()
 
-                    if records:
-                        print(f"✅ Found {len(records)} existing transcript segments in database")
+                    if not records:
+                        print(f"ℹ️  No existing transcripts found for {video_file}")
+                        return False
 
-                        # Convert to transcript_data format
+                    num_records = len(records)
+                    print(f"✅ Found {num_records} existing transcript records in database")
+
+                    # Validate time coverage: check if max end_time covers video duration
+                    max_end_time = max(float(record.end_time) for record in records)
+                    min_start_time = min(float(record.start_time) for record in records)
+                    coverage = max_end_time - min_start_time
+
+                    # Count non-empty segments for logging
+                    non_empty_count = sum(1 for r in records if r.text and r.text.strip() and float(r.duration) > 0)
+                    empty_count = num_records - non_empty_count
+
+                    print(f"📊 Time coverage: {min_start_time:.1f}s → {max_end_time:.1f}s ({coverage:.1f}s)")
+                    print(f"📝 Segments: {non_empty_count} with text, {empty_count} empty/silent")
+
+                    # Check if transcripts cover the full video duration
+                    if max_end_time >= (video_duration - validation_tolerance):
+                        coverage_percent = (coverage / video_duration) * 100
+                        print(f"✅ Transcript coverage is complete ({coverage_percent:.1f}%)")
+
+                        # Convert to transcript_data format (include all records)
                         self.transcript_data = []
                         for record in records:
                             segment = {
@@ -1015,6 +1071,14 @@ class DetectorV2:
                         self.transcript_segments_saved = True
                         print(f"✅ Loaded {len(self.transcript_data)} transcript segments from database")
                         return True
+                    else:
+                        missing_duration = video_duration - max_end_time
+                        print(f"⚠️  Incomplete transcript coverage detected!")
+                        print(f"   Video duration: {video_duration:.1f}s")
+                        print(f"   Max coverage: {max_end_time:.1f}s")
+                        print(f"   Missing: {missing_duration:.1f}s at end")
+                        print(f"   🔄 Will reprocess transcript from scratch with new session_id")
+                        return False
 
                 finally:
                     session.close()
@@ -1024,12 +1088,34 @@ class DetectorV2:
                     'video_file', video_file
                 ).order('start_time').execute()
 
-                if result.data and len(result.data) > 0:
-                    print(f"✅ Found {len(result.data)} existing transcript segments in database")
+                if not result.data or len(result.data) == 0:
+                    print(f"ℹ️  No existing transcripts found for {video_file}")
+                    return False
 
-                    # Convert to transcript_data format
+                records = result.data
+                num_records = len(records)
+                print(f"✅ Found {num_records} existing transcript records in database")
+
+                # Validate time coverage: check if max end_time covers video duration
+                max_end_time = max(float(record['end_time']) for record in records)
+                min_start_time = min(float(record['start_time']) for record in records)
+                coverage = max_end_time - min_start_time
+
+                # Count non-empty segments for logging
+                non_empty_count = sum(1 for r in records if r.get('text', '').strip() and float(r.get('duration', 0)) > 0)
+                empty_count = num_records - non_empty_count
+
+                print(f"📊 Time coverage: {min_start_time:.1f}s → {max_end_time:.1f}s ({coverage:.1f}s)")
+                print(f"📝 Segments: {non_empty_count} with text, {empty_count} empty/silent")
+
+                # Check if transcripts cover the full video duration
+                if max_end_time >= (video_duration - validation_tolerance):
+                    coverage_percent = (coverage / video_duration) * 100
+                    print(f"✅ Transcript coverage is complete ({coverage_percent:.1f}%)")
+
+                    # Convert to transcript_data format (include all records)
                     self.transcript_data = []
-                    for record in result.data:
+                    for record in records:
                         segment = {
                             'start': float(record['start_time']),
                             'end': float(record['end_time']),
@@ -1044,9 +1130,14 @@ class DetectorV2:
                     self.transcript_segments_saved = True
                     print(f"✅ Loaded {len(self.transcript_data)} transcript segments from database")
                     return True
-
-            print(f"ℹ️  No existing transcripts found for {video_file}")
-            return False
+                else:
+                    missing_duration = video_duration - max_end_time
+                    print(f"⚠️  Incomplete transcript coverage detected!")
+                    print(f"   Video duration: {video_duration:.1f}s")
+                    print(f"   Max coverage: {max_end_time:.1f}s")
+                    print(f"   Missing: {missing_duration:.1f}s at end")
+                    print(f"   🔄 Will reprocess transcript from scratch with new session_id")
+                    return False
 
         except Exception as e:
             print(f"⚠️  Error loading existing transcripts: {e}")
@@ -1444,7 +1535,7 @@ PERFORMANCE METRICS:
             # Check if transcripts already exist in database
             if self.db and self.config['database'].get('enabled', False):
                 print(f"🔍 Checking for existing transcripts in database...")
-                if self._load_existing_transcripts(video_file):
+                if self._load_existing_transcripts(video_file, video_path):
                     print(f"✅ Using existing transcripts from database (skipping re-processing)")
                     print(f"   📊 {len(self.transcript_data)} segments loaded")
                     return

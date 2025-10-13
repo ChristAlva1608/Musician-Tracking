@@ -19,7 +19,8 @@ import shutil
 import cv2
 import numpy as np
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional
+from contextlib import contextmanager
 
 # Add parent directory to path
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,12 +32,11 @@ from src.video_aligner.shape_based_aligner_multi import (
     determine_reference_camera_group_by_audio_pattern,
     align_chunks_to_reference_timeline,
     generate_output_video_paths,
-    combine_chunk_videos_timeline_based,
-    load_config as load_aligner_config
+    combine_chunk_videos_timeline_based
 )
 
 # Import detection components
-from src.detect_v2 import DetectorV2
+from src.detect_v2_3d import DetectorV2
 
 # Import database components
 from src.database.setup import VideoAlignmentDatabase, ChunkVideoAlignmentDatabase
@@ -46,6 +46,27 @@ class IntegratedVideoProcessor:
     """
     Integrated processor that handles video alignment and detection in sequence
     """
+
+    @contextmanager
+    def _timer(self, step_name: str):
+        """
+        Context manager for timing operations
+
+        Args:
+            step_name: Name of the step being timed
+        """
+        start_time = time.time()
+        print(f"⏱️  [{step_name}] Starting...")
+        try:
+            yield
+        finally:
+            elapsed = time.time() - start_time
+            minutes = int(elapsed // 60)
+            seconds = elapsed % 60
+            if minutes > 0:
+                print(f"⏱️  [{step_name}] Completed in {minutes}m {seconds:.2f}s")
+            else:
+                print(f"⏱️  [{step_name}] Completed in {seconds:.2f}s")
 
     def __init__(self, config_path: str = 'src/config/config_v1.yaml'):
         """
@@ -153,51 +174,52 @@ class IntegratedVideoProcessor:
         Returns:
             True if alignment data exists, False otherwise
         """
-        if not self.alignment_directory or not os.path.exists(self.alignment_directory):
-            print(f"❌ Alignment directory not found: {self.alignment_directory}")
-            return False
+        with self._timer("Check Existing Alignment Data"):
+            if not self.alignment_directory or not os.path.exists(self.alignment_directory):
+                print(f"❌ Alignment directory not found: {self.alignment_directory}")
+                return False
 
-        video_files = glob.glob(os.path.join(self.alignment_directory, "*.mp4"))
-        if not video_files:
-            print(f"❌ No MP4 files found in {self.alignment_directory}")
-            return False
+            video_files = glob.glob(os.path.join(self.alignment_directory, "*.mp4"))
+            if not video_files:
+                print(f"❌ No MP4 files found in {self.alignment_directory}")
+                return False
 
-        print(f"🔍 Checking existing alignment data for {len(video_files)} videos...")
+            print(f"🔍 Checking existing alignment data for {len(video_files)} videos...")
 
-        # Extract source name from directory path
-        path_parts = self.alignment_directory.split('/')
-        vid_shot_parts = [part for part in path_parts if part.startswith('vid_shot')]
-        if vid_shot_parts:
-            source_name = vid_shot_parts[0]
-        else:
-            source_name = os.path.basename(os.path.dirname(self.alignment_directory.rstrip('/')))
-
-        print(f"🔍 Looking for alignment data with source: {source_name}")
-
-        try:
-            if self.enable_chunk_processing and self.chunk_alignment_db:
-                # Check chunk alignment database
-                result = self.chunk_alignment_db.get_chunk_alignments_by_source(source_name)
-                if result and len(result) > 0:
-                    print(f"✅ Found {len(result)} chunk alignment records in database")
-                    self._load_chunk_alignment_data(result, source_name)
-                    return True
+            # Extract source name from directory path
+            path_parts = self.alignment_directory.split('/')
+            vid_shot_parts = [part for part in path_parts if part.startswith('vid_shot')]
+            if vid_shot_parts:
+                source_name = vid_shot_parts[0]
             else:
-                # Check legacy alignment database
-                if self.alignment_db:
-                    all_alignments = self.alignment_db.get_all_video_alignments()
-                    source_alignments = [a for a in all_alignments if a.get('source', '').startswith(source_name)]
-                    if source_alignments:
-                        print(f"✅ Found {len(source_alignments)} alignment records in database")
-                        self._load_legacy_alignment_data(source_alignments)
+                source_name = os.path.basename(os.path.dirname(self.alignment_directory.rstrip('/')))
+
+            print(f"🔍 Looking for alignment data with source: {source_name}")
+
+            try:
+                if self.enable_chunk_processing and self.chunk_alignment_db:
+                    # Check chunk alignment database
+                    result = self.chunk_alignment_db.get_chunk_alignments_by_source(source_name)
+                    if result and len(result) > 0:
+                        print(f"✅ Found {len(result)} chunk alignment records in database")
+                        self._load_chunk_alignment_data(result)
                         return True
+                else:
+                    # Check legacy alignment database
+                    if self.alignment_db:
+                        all_alignments = self.alignment_db.get_all_video_alignments()
+                        source_alignments = [a for a in all_alignments if a.get('source', '').startswith(source_name)]
+                        if source_alignments:
+                            print(f"✅ Found {len(source_alignments)} alignment records in database")
+                            self._load_legacy_alignment_data(source_alignments)
+                            return True
 
-            print(f"⚠️ No alignment data found in database for source: {source_name}")
-            return False
+                print(f"⚠️ No alignment data found in database for source: {source_name}")
+                return False
 
-        except Exception as e:
-            print(f"❌ Error checking alignment data: {e}")
-            return False
+            except Exception as e:
+                print(f"❌ Error checking alignment data: {e}")
+                return False
 
     def _save_chunk_alignment_data(self, camera_groups: dict, reference_prefix: str, method_type: str):
         """Save chunk alignment data to database"""
@@ -249,7 +271,7 @@ class IntegratedVideoProcessor:
 
         print(f"💾 Database save complete: {success_count}/{total_chunks} chunks saved successfully")
 
-    def _load_chunk_alignment_data(self, chunk_data: List[Dict], source_name: str):
+    def _load_chunk_alignment_data(self, chunk_data: List[Dict]):
         """Load chunk alignment data from database"""
         print(f"📊 Loading chunk alignment data...")
 
@@ -370,26 +392,27 @@ class IntegratedVideoProcessor:
         Returns:
             True if analysis successful, False otherwise
         """
-        print(f"\n{'='*60}")
-        print("ANALYZING VIDEO ALIGNMENT")
-        print(f"{'='*60}")
+        with self._timer("Analyze Video Alignment"):
+            print(f"\n{'='*60}")
+            print("ANALYZING VIDEO ALIGNMENT")
+            print(f"{'='*60}")
 
-        if not os.path.exists(self.alignment_directory):
-            print(f"❌ Alignment directory not found: {self.alignment_directory}")
-            return False
+            if not os.path.exists(self.alignment_directory):
+                print(f"❌ Alignment directory not found: {self.alignment_directory}")
+                return False
 
-        try:
-            # Use the same logic as shape_based_aligner_multi.py main function
-            if self.enable_chunk_processing:
-                return self._analyze_chunk_alignment()
-            else:
-                return self._analyze_legacy_alignment()
+            try:
+                # Use the same logic as shape_based_aligner_multi.py main function
+                if self.enable_chunk_processing:
+                    return self._analyze_chunk_alignment()
+                else:
+                    return self._analyze_legacy_alignment()
 
-        except Exception as e:
-            print(f"❌ Error during alignment analysis: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            except Exception as e:
+                print(f"❌ Error during alignment analysis: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
 
     def _analyze_chunk_alignment(self) -> bool:
         """Analyze alignment using chunk processing logic"""
@@ -402,17 +425,33 @@ class IntegratedVideoProcessor:
             return False
 
         # Step 2: Determine reference camera group
-        # Select alignment method based on processing type and unified_videos setting
-        # use_offset -> latest_start (synchronized content)
-        # full_frames or unified_videos -> earliest_start (full video content)
-        if self.processing_type == "use_offset" and not self.unified_videos:
-            use_earliest_start = False  # Use latest_start for synchronized content
-            method_type = 'latest_start'
-        else:
-            use_earliest_start = True   # Use earliest_start for full frames or unified videos
-            method_type = 'earliest_start'
+        # Auto-pair processing_type with reference_strategy:
+        #
+        # Strategy Selection Logic:
+        # 1. unified_videos=true  → always earliest_start (need full timeline for sync)
+        # 2. processing_type=full_frames → earliest_start (process all content)
+        # 3. processing_type=use_offset → latest_start (only synchronized portion)
+        #
+        # Note: reference_strategy from config is ignored - determined automatically
 
-        print(f"🎯 Using {method_type} alignment method (processing_type={self.processing_type}, unified_videos={self.unified_videos})")
+        if self.unified_videos:
+            # Unified videos always need earliest_start for complete timeline
+            use_earliest_start = True
+            method_type = 'earliest_start'
+            reason = "unified_videos requires full timeline"
+        elif self.processing_type == "full_frames":
+            # Full frames processing needs all content from earliest camera
+            use_earliest_start = True
+            method_type = 'earliest_start'
+            reason = "full_frames processes all content"
+        else:  # use_offset
+            # Use offset only processes synchronized portion
+            use_earliest_start = False
+            method_type = 'latest_start'
+            reason = "use_offset processes only synchronized portion"
+
+        print(f"🎯 Auto-selected alignment: {method_type} ({reason})")
+        print(f"   processing_type={self.processing_type}, unified_videos={self.unified_videos}")
         reference_prefix = determine_reference_camera_group_by_audio_pattern(camera_groups, use_earliest_start)
 
         # Step 3: Align chunks
@@ -479,33 +518,87 @@ class IntegratedVideoProcessor:
     def create_aligned_videos(self) -> bool:
         """
         Create aligned output videos based on alignment results
+        - For chunk videos: merge chunks into aligned_videos folder
+        - For regular videos: map original paths directly (no copying)
 
         Returns:
             True if video creation successful, False otherwise
         """
-        if not self.save_output_videos:
-            print("⏭️ Skipping video creation (save_output_videos disabled)")
-            return True
-
         if not self.alignment_results:
             print("❌ No alignment results available for video creation")
             return False
 
         print(f"\n{'='*60}")
-        print("CREATING ALIGNED VIDEOS")
+        print("PREPARING VIDEOS FOR DETECTION")
         print(f"{'='*60}")
 
         try:
-            if self.enable_chunk_processing:
+            # Check if we're dealing with actual chunk videos
+            has_chunks = self._has_chunk_videos()
+
+            if has_chunks:
+                print("📦 Detected chunk videos - merging into aligned videos...")
                 return self._create_chunk_aligned_videos()
             else:
-                return self._create_legacy_aligned_videos()
+                print("📁 Detected regular videos - using original paths directly (no copying)...")
+                return self._map_original_video_paths()
 
         except Exception as e:
-            print(f"❌ Error creating aligned videos: {e}")
+            print(f"❌ Error preparing videos: {e}")
             import traceback
             traceback.print_exc()
             return False
+
+    def _has_chunk_videos(self) -> bool:
+        """
+        Check if alignment results contain chunk videos (multiple chunks per camera)
+
+        Returns:
+            True if chunk videos detected, False for regular videos
+        """
+        if not self.alignment_results:
+            return False
+
+        # Check if alignment_results contains CameraGroup objects with chunks
+        for prefix, group in self.alignment_results.items():
+            if hasattr(group, 'chunks'):
+                # If there are multiple chunks for any camera, it's chunk processing
+                if len(group.chunks) > 1:
+                    print(f"   🔍 Camera {prefix} has {len(group.chunks)} chunks - chunk processing needed")
+                    return True
+
+        return False
+
+    def _map_original_video_paths(self) -> bool:
+        """
+        Map original video paths for detection without copying files
+
+        Returns:
+            True if mapping successful, False otherwise
+        """
+        print("🗺️ Mapping original video paths for detection...")
+
+        self.output_videos = {}
+
+        # Get video files from alignment directory
+        video_files = glob.glob(os.path.join(self.alignment_directory, "*.mp4"))
+
+        if not video_files:
+            print("❌ No video files found in alignment directory")
+            return False
+
+        # Map each video file to its original path
+        for video_file in sorted(video_files):
+            # Extract camera identifier from filename (e.g., cam_1.mp4 -> cam_1)
+            filename = os.path.basename(video_file)
+            camera_prefix = os.path.splitext(filename)[0]  # Remove .mp4
+
+            # Store original path directly
+            self.output_videos[camera_prefix] = video_file
+            print(f"   ✅ {camera_prefix} -> {video_file} (original)")
+
+        print(f"✅ Mapped {len(self.output_videos)} original video paths for detection")
+        return len(self.output_videos) > 0
 
     def _create_chunk_aligned_videos(self) -> bool:
         """Create aligned videos using chunk processing logic"""
@@ -562,151 +655,161 @@ class IntegratedVideoProcessor:
         Returns:
             True if detection successful, False otherwise
         """
-        if not self.run_detection:
-            print("⏭️ Skipping detection processing (run_detection disabled)")
-            return True
+        with self._timer("Run Detection on All Videos"):
+            if not self.run_detection:
+                print("⏭️ Skipping detection processing (run_detection disabled)")
+                return True
 
-        if not self.output_videos:
-            print("❌ No output videos available for detection")
-            return False
+            if not self.output_videos:
+                print("❌ No output videos available for detection")
+                return False
 
-        print(f"\n{'='*60}")
-        print("RUNNING DETECTION ON ALIGNED VIDEOS")
-        print(f"{'='*60}")
+            print(f"\n{'='*60}")
+            print("RUNNING DETECTION ON ALIGNED VIDEOS")
+            print(f"{'='*60}")
 
-        success_count = 0
-        total_videos = len(self.output_videos)
-        self.detection_output_videos = {}  # Track detection output videos for unified processing
+            success_count = 0
+            total_videos = len(self.output_videos)
+            self.detection_output_videos = {}  # Track detection output videos for unified processing
 
-        for camera_prefix, video_path in self.output_videos.items():
-            if not os.path.exists(video_path):
-                print(f"❌ Video not found: {video_path}")
-                continue
+            for camera_prefix, video_path in self.output_videos.items():
+                if not os.path.exists(video_path):
+                    print(f"❌ Video not found: {video_path}")
+                    continue
 
-            print(f"\n🎯 Processing detection for {camera_prefix}: {video_path}")
+                print(f"\n🎯 Processing detection for {camera_prefix}: {video_path}")
 
-            try:
-                # Create a new detector instance for this video
-                detector = DetectorV2(config_path='src/config/config_v1.yaml')
+                with self._timer(f"Detection for {camera_prefix}"):
+                    try:
+                        # Create a new detector instance for this video
+                        detector = DetectorV2(config_path='src/config/config_v1.yaml')
 
-                # Apply configuration overrides from integrated_processor.detector_config
-                detector_overrides = self.integrated_config.get('detector_config', {})
-                if detector_overrides:
-                    print(f"🔧 Applying detector config overrides from integrated_processor.detector_config")
-                    for section, overrides in detector_overrides.items():
-                        print(f"   📝 Overriding {section}: {overrides}")
-                    detector.config = self._apply_config_overrides(detector.config, detector_overrides)
+                        # Apply configuration overrides from integrated_processor.detector_config
+                        detector_overrides = self.integrated_config.get('detector_config', {})
+                        if detector_overrides:
+                            print(f"🔧 Applying detector config overrides from integrated_processor.detector_config")
+                            for section, overrides in detector_overrides.items():
+                                print(f"   📝 Overriding {section}: {overrides}")
+                            detector.config = self._apply_config_overrides(detector.config, detector_overrides)
 
-                # Set the specific video path for this detector instance
-                detector.config['video']['source_path'] = video_path
+                        # Set the specific video path for this detector instance
+                        detector.config['video']['source_path'] = video_path
 
-                # Re-initialize database if database config was overridden and enabled
-                if detector.config.get('database', {}).get('enabled', False) and not detector.db:
-                    detector._init_database()
+                        # Set processing_type for synced_time calculation
+                        detector.processing_type = self.processing_type
+                        print(f"🎯 Setting detector processing_type: {self.processing_type}")
 
-                # Get alignment data for this camera
-                camera_offset = 0.0
-                use_offset = self.processing_type == "use_offset"
-                if use_offset and hasattr(self, 'alignment_results') and self.alignment_results:
-                    for prefix, group in self.alignment_results.items():
-                        if camera_prefix == prefix and group.chunks:
-                            camera_offset = group.chunks[0].start_time_offset
-                            break
+                        # Re-initialize database if database config was overridden and enabled
+                        if detector.config.get('database', {}).get('enabled', False) and not detector.db:
+                            detector._init_database()
 
-                # Configure frame processing mode based on processing_type
-                if self.processing_type == "full_frames":
-                    # Process full frames with alignment awareness
-                    detector.start_time_offset = camera_offset
+                        # Get alignment data for this camera
+                        # Offset is needed for BOTH processing modes:
+                        # - full_frames: used for synced_time calculation (synced_time = original_time - offset)
+                        # - use_offset: used for seeking and synced_time calculation
+                        camera_offset = 0.0
+                        use_offset = self.processing_type == "use_offset"
+                        if hasattr(self, 'alignment_results') and self.alignment_results:
+                            for prefix, group in self.alignment_results.items():
+                                if camera_prefix == prefix and group.chunks:
+                                    camera_offset = group.chunks[0].start_time_offset
+                                    print(f"🎯 Retrieved camera offset for {camera_prefix}: {camera_offset:.3f}s")
+                                    break
 
-                    if self.limit_processing_duration:
-                        # Apply duration limiting to full_frames processing
-                        detector.config['video']['process_matching_duration_only'] = True
-                        detector.process_matching_duration_only = True
-                        detector.matching_duration = self.max_processing_duration
-                        detector.end_time_offset = detector.start_time_offset + self.max_processing_duration
-                        print(f"🎬 Full frame processing with duration limit: {camera_offset:.3f}s to {detector.end_time_offset:.3f}s ({self.max_processing_duration}s)")
-                    else:
-                        # No duration limiting - process full frames
-                        detector.config['video']['process_matching_duration_only'] = False
-                        detector.process_matching_duration_only = False
-                        detector.matching_duration = 0.0  # Process to end
-                        detector.end_time_offset = None  # No end limit
-                        print(f"🎬 Full frame processing: camera offset {camera_offset:.3f}s (no duration limit)")
+                        # Configure frame processing mode based on processing_type
+                        if self.processing_type == "full_frames":
+                            # Process full frames with alignment awareness
+                            # IMPORTANT: Never seek in full_frames mode, always start from frame 0
+                            detector.start_time_offset = camera_offset
+                            detector.config['video']['process_matching_duration_only'] = False
+                            detector.process_matching_duration_only = False
 
-                elif self.limit_processing_duration:
-                    # Duration limiting with respect to processing type
-                    detector.config['video']['process_matching_duration_only'] = True
+                            if self.limit_processing_duration:
+                                # Apply duration limiting: process from 0 to max_processing_duration
+                                detector.matching_duration = self.max_processing_duration
+                                detector.end_time_offset = self.max_processing_duration
+                                print(f"🎬 Full frame processing with duration limit: 0s to {detector.end_time_offset:.3f}s ({self.max_processing_duration}s)")
+                                print(f"   Camera offset {camera_offset:.3f}s will be used for synced_time calculation only")
+                            else:
+                                # No duration limiting - process full frames to end
+                                detector.matching_duration = 0.0  # Process to end
+                                detector.end_time_offset = None  # No end limit
+                                print(f"🎬 Full frame processing: camera offset {camera_offset:.3f}s (no duration limit)")
 
-                    # Start from alignment offset (if use_offset) and process for max_processing_duration
-                    detector.start_time_offset = camera_offset if use_offset else 0.0
-                    detector.matching_duration = self.max_processing_duration
-                    detector.end_time_offset = detector.start_time_offset + self.max_processing_duration
-                    detector.process_matching_duration_only = True
+                        elif self.limit_processing_duration:
+                            # Duration limiting with respect to processing type
+                            detector.config['video']['process_matching_duration_only'] = True
 
-                    if use_offset:
-                        print(f"⏱️ Duration limiting ({self.processing_type}): {camera_offset:.3f}s to {detector.end_time_offset:.3f}s ({self.max_processing_duration}s)")
-                    else:
-                        print(f"⏱️ Duration limiting: first {self.max_processing_duration}s from start")
+                            # Start from alignment offset (if use_offset) and process for max_processing_duration
+                            detector.start_time_offset = camera_offset if use_offset else 0.0
+                            detector.matching_duration = self.max_processing_duration
+                            detector.end_time_offset = detector.start_time_offset + self.max_processing_duration
+                            detector.process_matching_duration_only = True
 
-                else:
-                    # Standard processing based on processing_type
-                    detector.config['video']['process_matching_duration_only'] = True
-                    detector.start_time_offset = camera_offset if use_offset else 0.0
-                    # Let detector determine matching_duration from database
-                    print(f"📏 Standard processing ({self.processing_type}): starting from {detector.start_time_offset:.3f}s")
+                            if use_offset:
+                                print(f"⏱️ Duration limiting ({self.processing_type}): {camera_offset:.3f}s to {detector.end_time_offset:.3f}s ({self.max_processing_duration}s)")
+                            else:
+                                print(f"⏱️ Duration limiting: first {self.max_processing_duration}s from start")
 
-                # Configure output paths using configuration
-                os.makedirs(self.detection_videos_dir, exist_ok=True)
+                        else:
+                            # Standard processing based on processing_type
+                            detector.config['video']['process_matching_duration_only'] = True
+                            detector.start_time_offset = camera_offset if use_offset else 0.0
+                            # Let detector determine matching_duration from database
+                            print(f"📏 Standard processing ({self.processing_type}): starting from {detector.start_time_offset:.3f}s")
 
-                # Extract source name and configure output paths for detection video
-                source_name = self._extract_source_name()
-                output_format = self.integrated_config.get('detection_output_format', 'mp4')
-                detection_output_filename = f"{self.timestamp_prefix}_detection_{source_name}_{camera_prefix}.{output_format}"
-                detection_output_path = os.path.join(self.detection_videos_dir, detection_output_filename)
-                temp_detection_path = os.path.join(self.detection_videos_dir, f"{self.timestamp_prefix}_temp_detection_{source_name}_{camera_prefix}.{output_format}")
+                        # Configure output paths using configuration
+                        os.makedirs(self.detection_videos_dir, exist_ok=True)
 
-                detector.config['video']['output_video_path'] = detection_output_path
-                detector.config['video']['temp_video_path'] = temp_detection_path
+                        # Extract source name and configure output paths for detection video
+                        source_name = self._extract_source_name()
+                        output_format = self.integrated_config.get('detection_output_format', 'mp4')
+                        detection_output_filename = f"{self.timestamp_prefix}_detection_{source_name}_{camera_prefix}.{output_format}"
+                        detection_output_path = os.path.join(self.detection_videos_dir, detection_output_filename)
+                        temp_detection_path = os.path.join(self.detection_videos_dir, f"{self.timestamp_prefix}_temp_detection_{source_name}_{camera_prefix}.{output_format}")
 
-                # Update session ID to include camera prefix for unique database records
-                detector.session_id = f"{self.session_id}_{camera_prefix}"
+                        detector.config['video']['output_video_path'] = detection_output_path
+                        detector.config['video']['temp_video_path'] = temp_detection_path
 
-                # Configure video file name for database records
-                video_file_for_db = f"{source_name}_{camera_prefix}.mp4"
+                        # Update session ID to include camera prefix for unique database records
+                        detector.session_id = f"{self.session_id}_{camera_prefix}"
 
-                print(f"🎯 Detection configuration:")
-                print(f"   📹 Input video: {video_path}")
-                print(f"   💾 Database enabled: {detector.config['database']['enabled']}")
-                print(f"   🎬 Output video: {detection_output_path}")
-                print(f"   📊 Session ID: {detector.session_id}")
-                print(f"   📝 Video file (DB): {video_file_for_db}")
-                print(f"   🎚️ Save output video: {detector.config['video']['save_output_video']}")
-                print(f"   🔊 Preserve audio: {detector.config['video']['preserve_audio']}")
-                print(f"   📄 Generate report: {detector.config['video']['generate_report']}")
+                        # Configure video file name for database records
+                        video_file_for_db = f"{source_name}_{camera_prefix}.mp4"
 
-                # Run detection with full workflow
-                detector.process_video(video_path)
+                        print(f"🎯 Detection configuration:")
+                        print(f"   📹 Input video: {video_path}")
+                        print(f"   💾 Database enabled: {detector.config['database']['enabled']}")
+                        print(f"   🎬 Output video: {detection_output_path}")
+                        print(f"   📊 Session ID: {detector.session_id}")
+                        print(f"   📝 Video file (DB): {video_file_for_db}")
+                        print(f"   🎚️ Save output video: {detector.config['video']['save_output_video']}")
+                        print(f"   🔊 Preserve audio: {detector.config['video']['preserve_audio']}")
+                        print(f"   📄 Generate report: {detector.config['video']['generate_report']}")
 
-                # Cleanup detector
-                detector.cleanup()
+                        # Run detection with full workflow
+                        detector.process_video(video_path)
 
-                print(f"✅ Full detection workflow complete for {camera_prefix}")
-                print(f"   💾 Database records saved with session: {detector.session_id}")
-                print(f"   🎬 Annotated video saved to: {detection_output_path}")
+                        # Cleanup detector
+                        detector.cleanup()
 
-                print(f"✅ Detection complete for {camera_prefix}")
-                success_count += 1
+                        print(f"✅ Full detection workflow complete for {camera_prefix}")
+                        print(f"   💾 Database records saved with session: {detector.session_id}")
+                        print(f"   🎬 Annotated video saved to: {detection_output_path}")
 
-                # Track detection output for unified video creation
-                self.detection_output_videos[camera_prefix] = detection_output_path
+                        print(f"✅ Detection complete for {camera_prefix}")
+                        success_count += 1
 
-            except Exception as e:
-                print(f"❌ Detection failed for {camera_prefix}: {e}")
-                import traceback
-                traceback.print_exc()
+                        # Track detection output for unified video creation
+                        self.detection_output_videos[camera_prefix] = detection_output_path
 
-        print(f"\n✅ Detection processing complete: {success_count}/{total_videos} videos processed successfully")
-        return success_count > 0
+                    except Exception as e:
+                        print(f"❌ Detection failed for {camera_prefix}: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+            print(f"\n✅ Detection processing complete: {success_count}/{total_videos} videos processed successfully")
+            return success_count > 0
 
     def _create_unified_video(self) -> bool:
         """
@@ -716,19 +819,11 @@ class IntegratedVideoProcessor:
             True if unified video creation successful, False otherwise
         """
         try:
-            import subprocess
-            from collections import defaultdict
-
             print(f"📹 Creating unified video from {len(self.detection_output_videos)} detection videos...")
 
             # Get configuration
             unified_config = self.unified_video_config
             output_filename = unified_config.get('output_filename', 'unified_detection_output.mp4')
-            stack_direction = unified_config.get('stack_direction', 'vertical')
-            add_labels = unified_config.get('add_camera_labels', True)
-            label_color = tuple(unified_config.get('label_color', [255, 255, 255]))
-            label_font_scale = unified_config.get('label_font_scale', 1.0)
-            background_color = tuple(unified_config.get('background_color', [0, 0, 0]))
 
             # Create output directory and path with timestamp prefix
             os.makedirs(self.unified_videos_dir, exist_ok=True)
@@ -1202,16 +1297,25 @@ class IntegratedVideoProcessor:
             temp_patterns = [
                 "temp_audio*",
                 "*_concat.txt",
-                "temp_video_no_audio.mp4"
+                "temp_video_no_audio.mp4",
+                f"{self.detection_videos_dir}/*temp_detection*.mp4",  # Temp detection videos
+                f"{self.unified_videos_dir}/*_with_audio.mp4"  # Intermediate unified videos
             ]
 
+            cleanup_count = 0
             for pattern in temp_patterns:
                 for temp_file in glob.glob(pattern):
                     try:
                         os.remove(temp_file)
                         print(f"🗑️ Removed: {temp_file}")
+                        cleanup_count += 1
                     except Exception as e:
                         print(f"⚠️ Could not remove {temp_file}: {e}")
+
+            if cleanup_count > 0:
+                print(f"✅ Cleaned up {cleanup_count} temporary file(s)")
+            else:
+                print("✅ No temporary files to clean up")
 
         print("✅ Cleanup complete")
 

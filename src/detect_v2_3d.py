@@ -63,7 +63,11 @@ class DetectorV2:
 
         # Flag to control video processing scope
         self.process_matching_duration_only = self.config.get('video', {}).get('process_matching_duration_only', True)
-        
+
+        # Processing type: determines synced_time calculation
+        # Can be set by integrated_video_processor or read from config
+        self.processing_type = self.config.get('video', {}).get('processing_type', 'use_offset')
+
         # Statistics for report generation
         self.stats = {
             'total_frames': 0,
@@ -396,76 +400,66 @@ class DetectorV2:
             'processing_times': {}
         }
         
-        # Hand detection FIRST (using two-stage detection for higher accuracy)
+        # Hand detection - using world landmarks for database storage and bad gesture detection
         if self.hand_detector:
             start_time = time.time()
-            hand_landmarks = []
+            left_hand_landmarks = None
+            right_hand_landmarks = None
             hand_raw_results = None
             hand_bboxes = []
 
-            # Stage 1: Initial hand detection on full frame
-            hand_results_stage1 = self.hand_detector.detect(frame)
+            # Detect hands in frame
+            hand_results = self.hand_detector.detect(frame)
 
-            if hand_results_stage1 and hasattr(hand_results_stage1, 'multi_hand_landmarks') and hand_results_stage1.multi_hand_landmarks:
-                # Check two-stage config once outside the loop
-                use_two_stage_hand = self.config['detection'].get('use_two_stage_hand', True)
-                height, width = frame.shape[:2]
+            # Extract world landmarks (3D coordinates) with handedness
+            if hand_results and hasattr(hand_results, 'multi_hand_world_landmarks') and hand_results.multi_hand_world_landmarks:
+                # Extract handedness information (Left/Right) from MediaPipe results
+                hand_handedness_list = []
+                if hasattr(hand_results, 'multi_handedness') and hand_results.multi_handedness:
+                    for handedness in hand_results.multi_handedness:
+                        # MediaPipe handedness: classification[0].label is 'Left' or 'Right'
+                        label = handedness.classification[0].label
+                        hand_handedness_list.append(label)
 
-                for hand_landmark_set in hand_results_stage1.multi_hand_landmarks:
-                    # Calculate precise bounding box from hand landmarks
-                    bbox = self._get_hand_bbox_from_landmarks(hand_landmark_set, frame.shape)
+                # Process each detected hand
+                for hand_idx, world_hand_landmarks in enumerate(hand_results.multi_hand_world_landmarks):
+                    # Determine handedness for this hand
+                    handedness = hand_handedness_list[hand_idx] if hand_idx < len(hand_handedness_list) else None
 
-                    if bbox:
-                        hand_bboxes.append(bbox)
+                    # Convert world landmarks to dictionary format
+                    world_landmarks_dict = []
+                    for landmark in world_hand_landmarks.landmark:
+                        world_landmarks_dict.append({
+                            'x': float(landmark.x),  # World coordinate in meters
+                            'y': float(landmark.y),  # World coordinate in meters
+                            'z': float(landmark.z)   # World coordinate in meters
+                        })
 
-                        # Stage 2: Crop and re-detect for higher accuracy (optional, based on config)
-                        if use_two_stage_hand:
-                            x, y, w, h = bbox['x'], bbox['y'], bbox['w'], bbox['h']
+                    # Assign to left or right hand based on handedness
+                    if world_landmarks_dict and handedness:
+                        if handedness == 'Left':
+                            left_hand_landmarks = world_landmarks_dict
+                        elif handedness == 'Right':
+                            right_hand_landmarks = world_landmarks_dict
 
-                            # Ensure valid crop region
-                            if w > 20 and h > 20:
-                                hand_crop = frame[y:y+h, x:x+w]
-
-                                # Re-detect on cropped region
-                                hand_results_stage2 = self.hand_detector.detect(hand_crop)
-
-                                if (hand_results_stage2 and
-                                    hasattr(hand_results_stage2, 'multi_hand_landmarks') and
-                                    hand_results_stage2.multi_hand_landmarks is not None):
-                                    # Use refined landmarks from stage 2
-                                    for refined_landmarks in hand_results_stage2.multi_hand_landmarks:
-                                        adjusted_landmarks = []
-                                        for landmark in refined_landmarks.landmark:
-                                            # Convert back to original frame coordinates
-                                            orig_x = landmark.x * w + x
-                                            orig_y = landmark.y * h + y
-                                            adjusted_landmarks.append({
-                                                'x': orig_x / width,
-                                                'y': orig_y / height,
-                                                'z': landmark.z if hasattr(landmark, 'z') else 0
-                                            })
-                                        if adjusted_landmarks:
-                                            hand_landmarks.append(adjusted_landmarks)
-                                else:
-                                    # Fall back to stage 1 landmarks if stage 2 fails
-                                    landmarks_dict = self._convert_landmarks_to_dict(hand_landmark_set)
-                                    if landmarks_dict:
-                                        hand_landmarks.append(landmarks_dict)
-                        else:
-                            # Use stage 1 landmarks directly if two-stage is disabled
-                            landmarks_dict = self._convert_landmarks_to_dict(hand_landmark_set)
-                            if landmarks_dict:
-                                hand_landmarks.append(landmarks_dict)
+                # Calculate bounding boxes from screen landmarks for visualization
+                if hasattr(hand_results, 'multi_hand_landmarks') and hand_results.multi_hand_landmarks:
+                    for hand_landmark_set in hand_results.multi_hand_landmarks:
+                        bbox = self._get_hand_bbox_from_landmarks(hand_landmark_set, frame.shape)
+                        if bbox:
+                            hand_bboxes.append(bbox)
 
                 # Store raw results for visualization
-                hand_raw_results = hand_results_stage1
+                hand_raw_results = hand_results
 
-            results['hand_landmarks'] = hand_landmarks
+            results['left_hand_landmarks'] = left_hand_landmarks
+            results['right_hand_landmarks'] = right_hand_landmarks
             results['hand_raw_results'] = hand_raw_results
             results['hand_bboxes'] = hand_bboxes if hand_bboxes else None
             results['processing_times']['hand'] = float(f"{(time.time() - start_time) * 1000:.3f}")
         else:
-            results['hand_landmarks'] = None
+            results['left_hand_landmarks'] = None
+            results['right_hand_landmarks'] = None
             results['hand_raw_results'] = None
             results['hand_bboxes'] = None
             results['processing_times']['hand'] = 0
@@ -842,18 +836,22 @@ class DetectorV2:
             return
         
         try:
-            # Calculate proper timing values based on processing mode
-            original_time = results['frame_number'] / 30.0  # Assuming 30 fps
+            # Calculate proper timing values based on processing type
+            frame_time = results['frame_number'] / 30.0  # Time since processing started (assuming 30 fps)
 
-            if self.process_matching_duration_only:
-                # In matching duration mode: frame_number starts from the seeked position
-                # So the actual video time is start_time_offset + original_time
-                # And synced_time = actual_time - start_time_offset = original_time
-                synced_time = original_time
-            else:
-                # In whole video mode: frame_number starts from 0 (beginning of video)
-                # So synced_time needs to account for the offset to align with other videos
+            # Synced time calculation based on processing_type
+            if self.processing_type == "full_frames":
+                # Full frames mode: frame_number starts from 0 (beginning of video)
+                # original_time is the absolute time in the video file
+                original_time = frame_time
+                # Need to subtract offset to sync with other cameras
                 synced_time = original_time - self.start_time_offset
+            else:  # use_offset
+                # Use offset mode: video is seeked to start_time_offset
+                # original_time should reflect absolute position in video file
+                original_time = self.start_time_offset + frame_time
+                # synced_time starts from 0 for all cameras at sync point
+                synced_time = frame_time
             
             # Get transcript segment ID for this frame
             transcript_segment_id = None
