@@ -1735,9 +1735,16 @@ PERFORMANCE METRICS:
                 self.preserve_audio = False
         
         # Retrieve alignment data from database before starting
-        # But preserve duration limiting settings if they were explicitly set
-        if not (hasattr(self, 'matching_duration') and self.matching_duration > 0 and self.process_matching_duration_only):
-            self.start_time_offset, self.matching_duration = self._get_alignment_data(video_file)
+        # But preserve duration limiting settings if they were explicitly set by caller (e.g., integrated_video_processor)
+        # Skip database query if end_time_offset was explicitly set (indicates integrated_video_processor configured everything)
+        already_configured_by_caller = hasattr(self, 'end_time_offset') and self.end_time_offset is not None
+
+        if not already_configured_by_caller:
+            # Pass full video_path (not just basename) so source name can be extracted correctly
+            self.start_time_offset, self.matching_duration = self._get_alignment_data(video_path if video_path and video_path != '0' else video_file)
+        else:
+            print(f"ℹ️ Using alignment settings provided by caller (start_offset={self.start_time_offset:.3f}s, matching_duration={self.matching_duration:.1f}s, end_offset={self.end_time_offset:.1f}s)")
+
         print(f"⏰ Start time offset: {self.start_time_offset:.3f}s")
         print(f"⏱️ Matching duration: {self.matching_duration:.1f}s")
         
