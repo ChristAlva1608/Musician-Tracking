@@ -42,25 +42,25 @@ class MediaPipePoseDetector(BasePoseDetector):
     def convert_to_dict(self, results: Any) -> Optional[List[Dict]]:
         """
         Convert MediaPipe pose landmarks to dictionary format
-        
+
         Args:
             results: MediaPipe pose detection results
-            
+
         Returns:
             List of pose landmark dictionaries or None
         """
-        if not results or not results.pose_landmarks:
+        if not results or not results.pose_world_landmarks:
             return None
-        
+
         landmark_data = []
-        for landmark in results.pose_landmarks.landmark:
+        for landmark in results.pose_world_landmarks.landmark:
             landmark_data.append({
                 "x": float(landmark.x),
                 "y": float(landmark.y),
                 "z": float(landmark.z),
                 "confidence": float(landmark.visibility)
             })
-        
+
         return landmark_data
     
     def draw_landmarks(self, frame: np.ndarray, results: Any) -> np.ndarray:
@@ -83,20 +83,20 @@ class MediaPipePoseDetector(BasePoseDetector):
     def get_landmark_by_name(self, results: Any, landmark_name: str) -> Optional[Dict]:
         """
         Get specific landmark by name
-        
+
         Args:
             results: MediaPipe pose detection results
             landmark_name: Name of the landmark (e.g., 'LEFT_WRIST', 'RIGHT_SHOULDER')
-            
+
         Returns:
             Landmark dictionary or None
         """
-        if not results or not results.pose_landmarks:
+        if not results or not results.pose_world_landmarks:
             return None
-        
+
         try:
             landmark_index = getattr(self.pose_landmarks, landmark_name)
-            landmark = results.pose_landmarks.landmark[landmark_index]
+            landmark = results.pose_world_landmarks.landmark[landmark_index]
             return {
                 "x": float(landmark.x),
                 "y": float(landmark.y),

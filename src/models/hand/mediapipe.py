@@ -38,18 +38,18 @@ class MediaPipeHandDetector(BaseHandDetector):
     def convert_to_dict(self, results: Any) -> Tuple[Optional[List[Dict]], Optional[List[Dict]]]:
         """
         Convert MediaPipe hand landmarks to dictionary format
-        
+
         Args:
             results: MediaPipe hand detection results
-            
+
         Returns:
             Tuple of (left_hand_landmarks, right_hand_landmarks)
         """
         left_hand = None
         right_hand = None
-        
-        if results and results.multi_hand_landmarks:
-            for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
+
+        if results and results.multi_hand_world_landmarks:
+            for i, hand_landmarks in enumerate(results.multi_hand_world_landmarks):
                 hand_data = []
                 for landmark in hand_landmarks.landmark:
                     hand_data.append({
@@ -58,14 +58,14 @@ class MediaPipeHandDetector(BaseHandDetector):
                         "z": float(landmark.z),
                         "confidence": 1.0  # MediaPipe doesn't provide per-landmark confidence for hands
                     })
-                
+
                 # For simplicity, assume first hand is left, second is right
                 # In production, you'd use handedness detection from results.multi_handedness
                 if i == 0:
                     left_hand = hand_data
                 elif i == 1:
                     right_hand = hand_data
-        
+
         return left_hand, right_hand
     
     def draw_landmarks(self, frame: np.ndarray, results: Any) -> np.ndarray:
