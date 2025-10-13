@@ -253,7 +253,8 @@ class DetectorV2:
     def _init_bad_gesture_detector(self):
         """Initialize enhanced 3D bad gesture detector based on config"""
         bad_gesture_config = self.config.get('bad_gestures', {})
-        return BadGestureDetector3D(config=bad_gesture_config)
+        # Disable detector's built-in drawing since we handle it in draw_results
+        return BadGestureDetector3D(config=bad_gesture_config, draw_on_frame=False)
     
     def _init_transcript_detector(self):
         """Initialize transcript detector based on config"""
@@ -842,13 +843,14 @@ class DetectorV2:
             # Synced time calculation based on processing_type
             if self.processing_type == "full_frames":
                 # Full frames mode: frame_number starts from 0 (beginning of video)
-                # original_time is the absolute time in the video file
+                # Uses earliest_start strategy: camera with offset=0 started earliest
+                # Cameras with positive offsets started LATER
                 original_time = frame_time
-                # Need to subtract offset to sync with other cameras
-                synced_time = original_time - self.start_time_offset
+                # Add offset to sync: offset represents how much later this camera started
+                synced_time = original_time + self.start_time_offset
             else:  # use_offset
                 # Use offset mode: video is seeked to start_time_offset
-                # original_time should reflect absolute position in video file
+                # Uses latest_start strategy: seeks to synchronized starting point
                 original_time = self.start_time_offset + frame_time
                 # synced_time starts from 0 for all cameras at sync point
                 synced_time = frame_time
@@ -1344,10 +1346,12 @@ PERFORMANCE METRICS:
         # Draw emotion result if available
         if results.get('dominant_emotion'):
             y_offset += line_height
-            cv2.putText(annotated_frame, f"Detected emotion: {results['dominant_emotion']}", 
+            cv2.putText(annotated_frame, f"Detected emotion: {results['dominant_emotion']}",
                        (10, y_offset), font, font_scale, (0, 255, 0), thickness)
-        
-        # Bad gesture annotations removed (but detection still runs in background)
+
+        # Draw bad gesture warnings in center of frame
+        if results.get('bad_gestures'):
+            annotated_frame = self._draw_bad_gestures_center(annotated_frame, results['bad_gestures'])
         
         # Add transcript overlay if available
         if self.transcript_detector:
@@ -1382,7 +1386,80 @@ PERFORMANCE METRICS:
         results['processing_times']['total'] = float(f"{current_total:.3f}")
         
         return annotated_frame
-    
+
+    def _draw_bad_gestures_center(self, frame: np.ndarray, bad_gestures: Dict[str, bool]) -> np.ndarray:
+        """Draw bad gesture warnings in the center of the frame"""
+        height, width = frame.shape[:2]
+
+        # Collect detected bad gestures
+        detected_gestures = []
+        if bad_gestures.get('turtle_neck', False):
+            detected_gestures.append("TURTLE NECK")
+        if bad_gestures.get('hunched_back', False):
+            detected_gestures.append("HUNCHED BACK")
+        if bad_gestures.get('low_wrists', False):
+            detected_gestures.append("LOW WRISTS")
+        if bad_gestures.get('fingers_pointing_up', False):
+            detected_gestures.append("PINKY UP")
+
+        # If no bad gestures, show good posture
+        if not detected_gestures:
+            text = "GOOD POSTURE"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.2
+            thickness = 3
+            color = (0, 255, 0)  # Green
+
+            # Get text size for centering
+            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+
+            # Calculate center position
+            x = (width - text_width) // 2
+            y = height // 2
+
+            # Draw background rectangle
+            padding = 15
+            cv2.rectangle(frame,
+                         (x - padding, y - text_height - padding),
+                         (x + text_width + padding, y + padding),
+                         (0, 0, 0), -1)
+
+            # Draw text
+            cv2.putText(frame, text, (x, y), font, font_scale, color, thickness)
+        else:
+            # Draw detected bad gestures
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.0
+            thickness = 2
+            color = (0, 0, 255)  # Red
+            line_height = 45
+
+            # Calculate total height needed
+            total_height = len(detected_gestures) * line_height
+            start_y = (height - total_height) // 2 + 30  # Center vertically
+
+            for i, gesture in enumerate(detected_gestures):
+                text = f"! {gesture}"
+
+                # Get text size for centering
+                (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+
+                # Calculate center position
+                x = (width - text_width) // 2
+                y = start_y + i * line_height
+
+                # Draw background rectangle
+                padding = 10
+                cv2.rectangle(frame,
+                             (x - padding, y - text_height - padding),
+                             (x + text_width + padding, y + padding),
+                             (0, 0, 0), -1)
+
+                # Draw text
+                cv2.putText(frame, text, (x, y), font, font_scale, color, thickness)
+
+        return frame
+
     def _draw_processing_times_right_corner(self, frame: np.ndarray, results: Dict[str, Any]):
         """Draw processing times in the top-right corner of the frame"""
         _, width = frame.shape[:2]
@@ -1394,14 +1471,13 @@ PERFORMANCE METRICS:
         line_height = 20
         margin = 10
         
-        # Processing time data
+        # Processing time data (excluding transcript - processed before frame loop)
         processing_data = [
             ("Hand", self.config['detection'].get('hand_model', 'none'), results['processing_times'].get('hand', 0), (0, 255, 255)),
-            ("Pose", self.config['detection'].get('pose_model', 'none'), results['processing_times'].get('pose', 0), (255, 0, 255)), 
+            ("Pose", self.config['detection'].get('pose_model', 'none'), results['processing_times'].get('pose', 0), (255, 0, 255)),
             ("Face", self.config['detection'].get('facemesh_model', 'none'), results['processing_times'].get('face', 0), (0, 255, 0)),
             ("Emotion", self.config['detection'].get('emotion_model', 'none'), results['processing_times'].get('emotion', 0), (255, 128, 0)),
             ("BadGest", "enabled" if self.bad_gesture_detector else "disabled", results['processing_times'].get('bad_gestures', 0), (255, 0, 255)),
-            ("Transcript", self.config['detection'].get('transcript_model', 'none'), results['processing_times'].get('transcript', 0), (0, 255, 255)),
             ("TOTAL", "", results['processing_times'].get('total', 0), (0, 0, 255))
         ]
         
@@ -1685,13 +1761,19 @@ PERFORMANCE METRICS:
             print(f"📹 Processing entire video from beginning (whole video mode)")
         
         # Calculate end time for processing based on mode
-        if self.process_matching_duration_only and self.matching_duration > 0:
-            self.end_time_offset = self.start_time_offset + self.matching_duration
-            print(f"🏁 Processing will end at: {self.end_time_offset:.1f}s (matching duration mode)")
+        # NOTE: end_time_offset may already be set by integrated_video_processor
+        if not hasattr(self, 'end_time_offset') or self.end_time_offset is None:
+            # end_time_offset not set externally, determine based on mode
+            if self.process_matching_duration_only and self.matching_duration > 0:
+                self.end_time_offset = self.start_time_offset + self.matching_duration
+                print(f"🏁 Processing will end at: {self.end_time_offset:.1f}s (matching duration mode)")
+            else:
+                self.end_time_offset = None  # Process entire video
+                if not self.process_matching_duration_only:
+                    print(f"🏁 Processing entire video (whole video mode)")
         else:
-            self.end_time_offset = None  # Process entire video
-            if not self.process_matching_duration_only:
-                print(f"🏁 Processing entire video (whole video mode)")
+            # end_time_offset was already set externally (by integrated processor)
+            print(f"🏁 Processing will end at: {self.end_time_offset:.1f}s (externally set duration limit)")
         
         print("Press 'q' to quit, 'p' to pause/resume")
         
