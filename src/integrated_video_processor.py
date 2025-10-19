@@ -41,6 +41,17 @@ from src.detect_v2_3d import DetectorV2
 # Import database components
 from src.database.setup import VideoAlignmentDatabase, ChunkVideoAlignmentDatabase
 
+# Import helper utilities
+from src.helpers.video_path_helper import (
+    extract_source_name,
+    generate_aligned_video_path,
+    generate_detection_video_path,
+    generate_temp_detection_video_path,
+    generate_unified_video_path,
+    generate_output_paths_from_alignment_data,
+    generate_output_paths_from_legacy_data
+)
+
 
 class IntegratedVideoProcessor:
     """
@@ -187,12 +198,7 @@ class IntegratedVideoProcessor:
             print(f"🔍 Checking existing alignment data for {len(video_files)} videos...")
 
             # Extract source name from directory path
-            path_parts = self.alignment_directory.split('/')
-            vid_shot_parts = [part for part in path_parts if part.startswith('vid_shot')]
-            if vid_shot_parts:
-                source_name = vid_shot_parts[0]
-            else:
-                source_name = os.path.basename(os.path.dirname(self.alignment_directory.rstrip('/')))
+            source_name = extract_source_name(self.alignment_directory)
 
             print(f"🔍 Looking for alignment data with source: {source_name}")
 
@@ -228,7 +234,7 @@ class IntegratedVideoProcessor:
             return
 
         # Extract source name from alignment directory
-        source_name = self._extract_source_name()
+        source_name = extract_source_name(self.alignment_directory)
         print(f"💾 Saving alignment data to database for source: {source_name}")
 
         success_count = 0
@@ -347,42 +353,30 @@ class IntegratedVideoProcessor:
 
     def _generate_output_paths_from_alignment_data(self):
         """Generate output video paths from alignment data"""
-        # Use config-based directory
-        os.makedirs(self.aligned_videos_dir, exist_ok=True)
-
         print(f"📁 Generating output paths in: {self.aligned_videos_dir}")
 
-        # Extract source name from alignment directory
-        source_name = self._extract_source_name()
+        self.output_videos = generate_output_paths_from_alignment_data(
+            self.alignment_results,
+            self.alignment_directory,
+            self.aligned_videos_dir,
+            self.timestamp_prefix
+        )
 
-        self.output_videos = {}
-        for camera_prefix, camera_group in self.alignment_results.items():
-            output_filename = f"{self.timestamp_prefix}_{source_name}_{camera_prefix}.mp4"
-            output_path = os.path.join(self.aligned_videos_dir, output_filename)
-            self.output_videos[camera_prefix] = output_path
-
-            # Set the output_video_path on the CameraGroup object
-            camera_group.output_video_path = output_path
-
+        for camera_prefix, output_path in self.output_videos.items():
             print(f"  {camera_prefix} -> {output_path}")
 
     def _generate_output_paths_from_legacy_data(self):
         """Generate output paths from legacy alignment data"""
-        # Use config-based directory
-        os.makedirs(self.aligned_videos_dir, exist_ok=True)
-
         print(f"📁 Generating output paths in: {self.aligned_videos_dir}")
 
-        # Extract source name from alignment directory
-        source_name = self._extract_source_name()
+        self.output_videos = generate_output_paths_from_legacy_data(
+            self.alignment_results,
+            self.alignment_directory,
+            self.aligned_videos_dir,
+            self.timestamp_prefix
+        )
 
-        self.output_videos = {}
-        for video_name in self.alignment_results:
-            camera_type = self.alignment_results[video_name].get('camera_type', 1)
-            camera_prefix = f"cam_{camera_type}"
-            output_filename = f"{self.timestamp_prefix}_{source_name}_{camera_prefix}.mp4"
-            output_path = os.path.join(self.aligned_videos_dir, output_filename)
-            self.output_videos[camera_prefix] = output_path
+        for camera_prefix, output_path in self.output_videos.items():
             print(f"  {camera_prefix} -> {output_path}")
 
     def analyze_video_alignment(self) -> bool:
@@ -497,7 +491,7 @@ class IntegratedVideoProcessor:
         os.makedirs(self.aligned_videos_dir, exist_ok=True)
 
         # Extract source name from alignment directory
-        source_name = self._extract_source_name()
+        source_name = extract_source_name(self.alignment_directory)
 
         for i, video_file in enumerate(video_files):
             camera_prefix = f"cam_{i+1}"
@@ -508,8 +502,9 @@ class IntegratedVideoProcessor:
                 'source_file': video_file
             }
 
-            output_filename = f"{self.timestamp_prefix}_{source_name}_{camera_prefix}.mp4"
-            output_path = os.path.join(self.aligned_videos_dir, output_filename)
+            output_path = generate_aligned_video_path(
+                self.aligned_videos_dir, source_name, camera_prefix, self.timestamp_prefix
+            )
             self.output_videos[camera_prefix] = output_path
 
         print(f"✅ Legacy alignment setup complete for {len(video_files)} videos")
@@ -762,11 +757,16 @@ class IntegratedVideoProcessor:
                         os.makedirs(self.detection_videos_dir, exist_ok=True)
 
                         # Extract source name and configure output paths for detection video
-                        source_name = self._extract_source_name()
+                        source_name = extract_source_name(self.alignment_directory)
                         output_format = self.integrated_config.get('detection_output_format', 'mp4')
-                        detection_output_filename = f"{self.timestamp_prefix}_detection_{source_name}_{camera_prefix}.{output_format}"
-                        detection_output_path = os.path.join(self.detection_videos_dir, detection_output_filename)
-                        temp_detection_path = os.path.join(self.detection_videos_dir, f"{self.timestamp_prefix}_temp_detection_{source_name}_{camera_prefix}.{output_format}")
+                        detection_output_path = generate_detection_video_path(
+                            self.detection_videos_dir, source_name, camera_prefix,
+                            self.timestamp_prefix, output_format
+                        )
+                        temp_detection_path = generate_temp_detection_video_path(
+                            self.detection_videos_dir, source_name, camera_prefix,
+                            self.timestamp_prefix, output_format
+                        )
 
                         detector.config['video']['output_video_path'] = detection_output_path
                         detector.config['video']['temp_video_path'] = temp_detection_path
@@ -825,10 +825,10 @@ class IntegratedVideoProcessor:
             unified_config = self.unified_video_config
             output_filename = unified_config.get('output_filename', 'unified_detection_output.mp4')
 
-            # Create output directory and path with timestamp prefix
-            os.makedirs(self.unified_videos_dir, exist_ok=True)
-            timestamped_filename = f"{self.timestamp_prefix}_{output_filename}"
-            unified_output_path = os.path.join(self.unified_videos_dir, timestamped_filename)
+            # Create output path with timestamp prefix
+            unified_output_path = generate_unified_video_path(
+                self.unified_videos_dir, output_filename, self.timestamp_prefix
+            )
 
             # Get alignment data and video information
             video_info = {}
@@ -1318,17 +1318,6 @@ class IntegratedVideoProcessor:
                 print("✅ No temporary files to clean up")
 
         print("✅ Cleanup complete")
-
-    def _extract_source_name(self) -> str:
-        """Extract source name from alignment directory path"""
-        # Extract source name from directory path (e.g., vid_shot1)
-        path_parts = self.alignment_directory.split('/')
-        vid_shot_parts = [part for part in path_parts if part.startswith('vid_shot')]
-        if vid_shot_parts:
-            return vid_shot_parts[0]
-        else:
-            # Fallback to directory name
-            return os.path.basename(os.path.dirname(self.alignment_directory.rstrip('/')))
 
     def process(self) -> bool:
         """
