@@ -505,11 +505,24 @@ class DetectorV2:
                             
                             if crop_landmarks and len(crop_landmarks) > 0:
                                 # Convert landmarks back to original frame coordinates
+                                # IMPORTANT: Keep z-coordinate for 3D world data!
                                 adjusted_landmarks = []
                                 for landmark in crop_landmarks:
+                                    # Scale x, y back to original frame coordinates
                                     orig_x = landmark['x'] * w_pad + x_pad
                                     orig_y = landmark['y'] * h_pad + y_pad
-                                    adjusted_landmarks.append({'x': orig_x, 'y': orig_y})
+
+                                    # Preserve z-coordinate (depth relative to face)
+                                    # MediaPipe provides z in normalized units relative to face width
+                                    # We can optionally scale it to approximate real-world units
+                                    orig_z = landmark.get('z', 0.0) * w_pad  # Scale z by face width
+
+                                    adjusted_landmarks.append({
+                                        'x': orig_x,
+                                        'y': orig_y,
+                                        'z': orig_z,  # ✅ Now preserving z-coordinate!
+                                        'confidence': landmark.get('confidence', 1.0)
+                                    })
                                 face_landmarks.extend(adjusted_landmarks)
                 
                 results['facemesh_landmarks'] = face_landmarks if face_landmarks else None
