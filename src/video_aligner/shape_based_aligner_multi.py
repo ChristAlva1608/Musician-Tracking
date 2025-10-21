@@ -32,6 +32,11 @@ class ChunkVideo:
     start_time_offset: float = 0.0  # Offset relative to reference video
     energy_profile: Optional[np.ndarray] = None
     time_axis: Optional[np.ndarray] = None
+    # Gap detection fields (Solution 3: Hybrid Alignment)
+    has_gap_before: bool = False
+    gap_duration: float = 0.0
+    gap_detection_method: str = ""  # 'timestamp', 'audio', 'hybrid'
+    recording_timestamp: Optional[object] = None  # datetime object from filename
 
 @dataclass
 class CameraGroup:
@@ -84,6 +89,91 @@ def extract_audio_with_ffmpeg(video_path, output_path, duration=None, start_time
         sample_rate = wav.getframerate()
     
     return audio, sample_rate
+
+def extract_timestamp_from_filename(filename: str) -> Optional[object]:
+    """
+    Extract recording start timestamp from Insta360 .insv filename
+
+    Insta360 filename format: VID_YYYYMMDD_HHMMSS_##_###.insv
+    - YYYYMMDD: Recording date
+    - HHMMSS: Recording start time (hour, minute, second)
+    - ##: Lens identifier (00=front, 10=back for X3)
+    - ###: Chunk number
+
+    Examples:
+        VID_20250709_191503_00_007.insv -> 2025-07-09 19:15:03
+        VID_20250709_203100_00_010.insv -> 2025-07-09 20:31:00
+        VID_20250705_163421_10_021.insv -> 2025-07-05 16:34:21 (X3 back lens)
+
+    Args:
+        filename: Video filename (can be full path or just filename)
+
+    Returns:
+        datetime object if successfully parsed, None otherwise
+    """
+    from datetime import datetime
+
+    # Extract just the filename if full path provided
+    basename = os.path.basename(filename)
+
+    # Pattern for Insta360 files: VID_YYYYMMDD_HHMMSS_##_###.insv
+    pattern = r'VID_(\d{8})_(\d{6})_\d{2}_\d+\.insv'
+    match = re.search(pattern, basename)
+
+    if match:
+        date_str = match.group(1)  # YYYYMMDD
+        time_str = match.group(2)  # HHMMSS
+
+        try:
+            dt = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+            return dt
+        except ValueError as e:
+            print(f"  ⚠️  Warning: Failed to parse timestamp from {basename}: {e}")
+            return None
+
+    # Try alternative format for converted files: P##_Cam#_chunk###.mp4
+    # (No timestamp embedded, return None)
+    return None
+
+def extract_audio_segment(video_path: str, start_time: float, duration: float, output_path: str) -> Optional[Tuple[np.ndarray, int]]:
+    """
+    Extract a specific audio segment from video
+
+    Args:
+        video_path: Path to video file
+        start_time: Start time in seconds
+        duration: Duration to extract in seconds
+        output_path: Path to save audio segment
+
+    Returns:
+        Tuple of (audio array, sample rate) or None if failed
+    """
+    return extract_audio_with_ffmpeg(video_path, output_path, duration=duration, start_time=start_time)
+
+def calculate_audio_similarity(audio1: np.ndarray, audio2: np.ndarray, sr: int) -> float:
+    """
+    Calculate similarity between two audio segments using cross-correlation
+
+    Args:
+        audio1: First audio array
+        audio2: Second audio array
+        sr: Sample rate
+
+    Returns:
+        Similarity score (0.0 = completely different, 1.0 = identical)
+    """
+    # Normalize audio
+    audio1_norm = audio1 / (np.max(np.abs(audio1)) + 1e-10)
+    audio2_norm = audio2 / (np.max(np.abs(audio2)) + 1e-10)
+
+    # Calculate cross-correlation
+    correlation = np.correlate(audio1_norm, audio2_norm, mode='valid')
+    max_correlation = np.max(np.abs(correlation))
+
+    # Normalize to 0-1 range
+    similarity = max_correlation / max(len(audio1), len(audio2))
+
+    return float(similarity)
 
 def extract_prefix_and_chunk_number(filename: str) -> Tuple[str, int]:
     """
@@ -348,8 +438,13 @@ def align_chunks_to_reference_timeline(camera_groups: Dict[str, CameraGroup],
                                       reference_prefix: str,
                                       use_earliest_start: bool = True) -> Dict[str, CameraGroup]:
     """
-    Align chunks using LEGACY algorithm - treat first chunks like full videos and align them,
-    then apply same offsets to remaining chunks in each camera group
+    SOLUTION 3: HYBRID ALIGNMENT
+
+    Align chunks using hybrid approach:
+    1. Audio alignment for first chunks (accurate synchronization)
+    2. Timestamp-based gap detection for subsequent chunks
+    3. Audio verification for ambiguous cases (5s-300s gaps)
+    4. Automatic gap preservation in timeline
 
     Args:
         camera_groups: Dictionary of camera groups
@@ -357,9 +452,11 @@ def align_chunks_to_reference_timeline(camera_groups: Dict[str, CameraGroup],
         use_earliest_start: Strategy for reference selection
 
     Returns:
-        Updated camera groups with absolute timeline positions for each chunk
+        Updated camera groups with absolute timeline positions and gap information
     """
-    print(f"\nPerforming chunk alignment using LEGACY logic...")
+    print(f"\n{'='*80}")
+    print("HYBRID CHUNK ALIGNMENT (Solution 3)")
+    print(f"{'='*80}")
     print(f"Reference camera: {reference_prefix}")
 
     # Create temp directory for audio extraction
@@ -400,8 +497,10 @@ def align_chunks_to_reference_timeline(camera_groups: Dict[str, CameraGroup],
         print(f"\nUsing LEGACY determine_reference_video logic...")
         reference_filename, legacy_offsets = determine_reference_video(first_chunk_profiles, use_earliest_start)
 
-        # Step 3: Map legacy offsets to camera groups and apply to all chunks
-        print(f"\nApplying legacy offsets to all chunks in each camera group...")
+        # Step 3: HYBRID ALIGNMENT - Apply offsets with timestamp verification and audio checking
+        print(f"\n{'='*60}")
+        print("Step 3: Hybrid Alignment with Gap Detection")
+        print(f"{'='*60}")
 
         for prefix, group in camera_groups.items():
             first_chunk = group.chunks[0]
@@ -409,37 +508,152 @@ def align_chunks_to_reference_timeline(camera_groups: Dict[str, CameraGroup],
             # Find the legacy offset for this camera group's first chunk
             camera_offset = legacy_offsets.get(first_chunk.filename, 0.0)
 
-            print(f"\nCamera group '{prefix}': applying offset {camera_offset:.3f}s to all chunks")
+            print(f"\n📹 Camera '{prefix}': base offset {camera_offset:.3f}s ({len(group.chunks)} chunks)")
 
-            # Apply the SAME offset to ALL chunks in this camera group
             for i, chunk in enumerate(group.chunks):
-                # For chunk processing, each chunk starts at: camera_offset + (sum of previous chunk durations)
-                chunk_start_within_camera = sum(group.chunks[j].duration for j in range(i))
-                chunk.start_time_offset = camera_offset + chunk_start_within_camera
+                # Extract timestamp from filename
+                chunk.recording_timestamp = extract_timestamp_from_filename(chunk.filename)
 
-                if chunk == first_chunk:
-                    marker = " (first chunk - from legacy alignment)"
+                if i == 0:
+                    # First chunk: use audio-aligned offset
+                    chunk.start_time_offset = camera_offset
+                    chunk.gap_detection_method = "audio"
+                    print(f"  ✅ [{i+1}] {chunk.filename}: {chunk.start_time_offset:.3f}s (audio aligned - FIRST CHUNK)")
+                    continue
+
+                prev_chunk = group.chunks[i-1]
+
+                # METHOD 1: Timestamp-based gap detection
+                if chunk.recording_timestamp and prev_chunk.recording_timestamp:
+                    actual_time_gap = (chunk.recording_timestamp - prev_chunk.recording_timestamp).total_seconds()
+                    expected_gap = prev_chunk.duration  # If continuous
+                    timestamp_delta = actual_time_gap - expected_gap
+
+                    if abs(timestamp_delta) < 5.0:
+                        # CONTINUOUS: timestamp confirms chunks are back-to-back
+                        chunk.start_time_offset = prev_chunk.start_time_offset + prev_chunk.duration
+                        chunk.gap_detection_method = "timestamp_continuous"
+                        print(f"  ✅ [{i+1}] {chunk.filename}: {chunk.start_time_offset:.3f}s (continuous, Δt={timestamp_delta:.1f}s)")
+
+                    elif timestamp_delta > 300:
+                        # LARGE GAP: definitely separate recording session
+                        chunk.start_time_offset = prev_chunk.start_time_offset + actual_time_gap
+                        chunk.has_gap_before = True
+                        chunk.gap_duration = timestamp_delta
+                        chunk.gap_detection_method = "timestamp_large_gap"
+                        print(f"  ⚠️  [{i+1}] {chunk.filename}: {chunk.start_time_offset:.3f}s (LARGE GAP: {timestamp_delta:.0f}s = {timestamp_delta/60:.1f}min)")
+
+                    else:
+                        # AMBIGUOUS GAP (5-300s): verify with audio
+                        print(f"  🔍 [{i+1}] {chunk.filename}: timestamp gap {timestamp_delta:.1f}s - verifying with audio...")
+
+                        # Extract audio from end of prev chunk and start of current chunk
+                        try:
+                            prev_audio_path = f'temp_audio/{prev_chunk.filename}_tail.wav'
+                            curr_audio_path = f'temp_audio/{chunk.filename}_head.wav'
+
+                            # Last 10 seconds of previous chunk
+                            prev_audio, prev_sr = extract_audio_segment(
+                                prev_chunk.filepath,
+                                start_time=max(0, prev_chunk.duration - 10),
+                                duration=10,
+                                output_path=prev_audio_path
+                            )
+
+                            # First 10 seconds of current chunk
+                            curr_audio, curr_sr = extract_audio_segment(
+                                chunk.filepath,
+                                start_time=0,
+                                duration=10,
+                                output_path=curr_audio_path
+                            )
+
+                            if prev_audio is not None and curr_audio is not None:
+                                similarity = calculate_audio_similarity(prev_audio, curr_audio, prev_sr)
+
+                                if similarity > 0.3:  # Threshold for "similar" audio
+                                    # Audio suggests continuous recording (e.g., small pause)
+                                    chunk.start_time_offset = prev_chunk.start_time_offset + prev_chunk.duration
+                                    chunk.gap_detection_method = "audio_verified_continuous"
+                                    print(f"       ✅ Audio similarity {similarity:.2f} → continuous (ignoring {timestamp_delta:.1f}s timestamp gap)")
+                                else:
+                                    # Audio confirms there's a gap
+                                    chunk.start_time_offset = prev_chunk.start_time_offset + actual_time_gap
+                                    chunk.has_gap_before = True
+                                    chunk.gap_duration = timestamp_delta
+                                    chunk.gap_detection_method = "audio_verified_gap"
+                                    print(f"       ⚠️  Audio similarity {similarity:.2f} → gap confirmed ({timestamp_delta:.1f}s)")
+
+                            # Cleanup audio files
+                            for path in [prev_audio_path, curr_audio_path]:
+                                if os.path.exists(path):
+                                    os.remove(path)
+
+                        except Exception as e:
+                            # Audio verification failed, use timestamp
+                            print(f"       ⚠️  Audio verification failed: {e}")
+                            chunk.start_time_offset = prev_chunk.start_time_offset + actual_time_gap
+                            chunk.has_gap_before = True if timestamp_delta > 10 else False
+                            chunk.gap_duration = timestamp_delta if chunk.has_gap_before else 0.0
+                            chunk.gap_detection_method = "timestamp_fallback"
+                            print(f"       → Using timestamp: gap={timestamp_delta:.1f}s")
+
                 else:
-                    marker = f" (chunk {chunk.chunk_number} - offset from camera start)"
+                    # No timestamp available: assume continuous (old behavior)
+                    chunk.start_time_offset = prev_chunk.start_time_offset + prev_chunk.duration
+                    chunk.gap_detection_method = "assumed_continuous"
+                    print(f"  ⚠️  [{i+1}] {chunk.filename}: {chunk.start_time_offset:.3f}s (no timestamp - assuming continuous)")
 
-                print(f"  {chunk.filename}: {chunk.start_time_offset:.3f}s{marker}")
+        # Step 4: Gap Summary Report
+        print(f"\n{'='*60}")
+        print("Step 4: Gap Detection Summary")
+        print(f"{'='*60}")
 
-        # Step 4: Verification - show final timeline
-        print(f"\nFinal timeline verification:")
+        total_gaps = 0
+        large_gaps = []
+
+        for prefix, group in camera_groups.items():
+            camera_gaps = [chunk for chunk in group.chunks if chunk.has_gap_before]
+
+            if camera_gaps:
+                print(f"\n📹 Camera '{prefix}': {len(camera_gaps)} gap(s) detected")
+                for chunk in camera_gaps:
+                    total_gaps += 1
+                    gap_min = chunk.gap_duration / 60
+                    print(f"   ⚠️  Before {chunk.filename}: {chunk.gap_duration:.1f}s ({gap_min:.1f}min) [{chunk.gap_detection_method}]")
+
+                    if chunk.gap_duration > 300:
+                        large_gaps.append((prefix, chunk.filename, chunk.gap_duration))
+
+        if total_gaps == 0:
+            print("\n✅ No gaps detected - all chunks appear continuous")
+        else:
+            print(f"\n⚠️  Total gaps detected: {total_gaps}")
+
+            if large_gaps:
+                print(f"\n🚨 LARGE GAPS (>5 minutes) - Consider splitting sessions:")
+                for prefix, filename, gap in large_gaps:
+                    print(f"   {prefix}/{filename}: {gap/60:.1f} minutes")
+
+        # Step 5: Verification - show final timeline
+        print(f"\n{'='*60}")
+        print("Step 5: Final Timeline Verification")
+        print(f"{'='*60}")
         print(f"Reference camera: {reference_prefix}")
 
         all_chunks = []
         for prefix, group in camera_groups.items():
             for chunk in group.chunks:
-                all_chunks.append((chunk.filename, chunk.start_time_offset, prefix))
+                all_chunks.append((chunk.filename, chunk.start_time_offset, prefix, chunk.has_gap_before, chunk.gap_duration))
 
         # Sort by timeline position
         all_chunks.sort(key=lambda x: x[1])
 
-        print(f"Timeline order:")
-        for filename, offset, prefix in all_chunks:
+        print(f"\nTimeline order:")
+        for filename, offset, prefix, has_gap, gap_dur in all_chunks:
             marker = " (REFERENCE)" if prefix == reference_prefix and offset == 0.0 else ""
-            print(f"  {filename} ({prefix}): {offset:.3f}s{marker}")
+            gap_marker = f" [GAP: {gap_dur:.0f}s before]" if has_gap else ""
+            print(f"  {filename} ({prefix}): {offset:.3f}s{marker}{gap_marker}")
 
     finally:
         # Clean up temp directory
