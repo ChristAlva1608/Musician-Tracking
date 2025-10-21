@@ -4,118 +4,97 @@ Based on the scan of your dissertation data, here are the specific issues found 
 
 ---
 
-## 🚨 Critical Issues (Fix Before Processing)
+## ✅ FIXED Issues (Completed on 2025-10-21)
 
-### 1. **Empty Template Folders - DELETE**
+### 1. ~~**Empty Template Folders**~~ - ✅ FIXED
+- Template folders have been relocated/deleted
+- No action needed
 
-These folders should be deleted as they're templates with no actual data:
+### 2. ~~**Privacy Issue - Participant Name in Filename**~~ - ✅ FIXED
+- **Old:** `LRV_Sarah short_104315_01_004.lrv`
+- **New:** `LRV_20250709_104315_01_004.lrv`
+- Renamed on all 3 drives (X10 Pro 1, MAML 26TB 1, MAML 26TB 2)
+- Privacy issue RESOLVED
 
-```bash
-# DELETE THESE:
-rm -rf "/Volumes/X10 Pro 1/Phan Dissertation Data/Tempate Name - MultiCam Data - Instrument - 2025-07-DD"
-rm -rf "/Volumes/X10 Pro 1/Phan Dissertation Data/Dottie and Emmy shared with Dottie Folder - MultiCam Data - Violin Piano - 2025-07-05"
-```
+### 3. ~~**Misplaced GoPro Files in iPhone Folder**~~ - ✅ FIXED
+- Removed ALL duplicate GoPro files from David's iPhone 12 folder
+- Files removed: 17 files (10 LRV + 7 MP4) per drive
+- Space freed: ~64.2 GB total across all 3 drives
+- iPhone folders now contain only iPhone content (IMG_0101.MOV)
 
-**Why:** Empty folders will cause processing errors and waste time.
+### 4. ~~**Incomplete Folder Names**~~ - ✅ FIXED
+- Matt's folder: Already fixed (no longer has template placeholders)
+
+### 5. ~~**Date Incomplete in Folder Name**~~ - ✅ FIXED
+- Sarah's iPad folder: Already shows correct date "2025-07-05"
+
+### 6. ~~**macOS Metadata Files (._*)**~~ - ✅ FIXED
+- All `._*` files deleted from all 3 drives
+- 45+ metadata files removed
+- Directories now clean
 
 ---
 
-### 2. **Privacy Issue - Participant Name in Filename**
+## 🚨 NEW Critical Issues (Requires Action Before Processing)
 
-**File:** `/Volumes/X10 Pro 1/Phan Dissertation Data/Sarah - MultiCam Data - Piano - 2025-07-05/360 Camera 1 - Sarah - Piano - 2025-07-05 X4/VID_Sarah short_104315_00_004.insv`
+### 7. **Wangling & Justine Stopby - File Split Required (July 9, 2025)**
 
-**Issue:** Filename contains participant's real name "Sarah" instead of standard Insta360 format
+**Status:** Files currently duplicated in both folders
+
+**Background:**
+- Wangling was recording when Justine stopped by during chunk 003
+- Chunk 003 files now exist in BOTH participants' folders (as intended)
+
+**Files Involved:**
+- `VID_20250709_132529_00_003.insv` (X5 Camera 2)
+- `VID_20250709_132654_00_003.insv` (X5 Camera 1)
+
+**Post-Conversion Action Required:**
+1. Convert chunk 003 to 2D first (must convert complete chunks)
+2. Review the 2D video to find timestamp when Justine appears
+3. Split the video at that point:
+   - **First portion:** Keep with Wangling's data
+   - **Second portion:** Keep with Justine's data (or both, depending on research needs)
+
+**Decision Needed:**
+- [ ] Determine split point after viewing converted video
+- [ ] Decide which portion goes to which participant
+- [ ] Document the split in processing logs
+
+**Current Status on All Drives:**
+- ✅ X10 Pro 1: Wangling has chunks 001, 002, 003
+- ✅ MAML 26TB 1: Wangling has chunks 001, 002, 003
+- ✅ MAML 26TB 2: Wangling has chunks 001, 002, 003
+- ✅ Justine still retains chunk 003 (duplicated)
+
+---
+
+### 8. **Philippe Missing 360 Camera 1 (July 16, 2025)**
+
+**Issue:** Philippe only has 2 cameras but they're numbered Camera 2 and Camera 3
+
+**Current folders:**
+- ✅ 360 Camera 2 - Philippe - Drum - 2025-07-16 X5 1
+- ✅ 360 Camera 3 - Philippe - Drum - 2025-07-16 X5 2
+- ❌ Missing: 360 Camera 1 - Philippe - Drum - 2025-07-16 X4
+
+**Files timestamps:** 13:04:03 - 13:04:29 (correct for Philippe's session)
+
+**Possible explanations:**
+1. Philippe only used 2 cameras (X5 cameras), X4 wasn't available
+2. There's a missing X4 camera folder somewhere
+3. Folder naming issue (should be renumbered to Camera 1 and Camera 2)
 
 **Action Required:**
-```bash
-# Option 1: Rename to standard format (if you can determine the correct timestamp)
-# Option 2: Exclude this file from processing
-# Option 3: Keep but note in conversion_log.csv that this file needs special handling
-```
-
-**Dissertation Impact:** If published data includes this filename, participant anonymity is compromised.
+- [ ] **REMINDER:** Search for missing `360 Camera 1 - Philippe - Drum - 2025-07-16 X4` folder
+- [ ] Verify if Philippe actually used 3 cameras or only 2
+- [ ] If only 2 cameras used, consider renaming:
+  - Camera 2 → Camera 1
+  - Camera 3 → Camera 2
 
 ---
 
-### 3. **Misplaced GoPro Files in iPhone Folder**
-
-**Location:** `/Volumes/X10 Pro 1/Phan Dissertation Data/David - MultiCam Data - Trombone and Dan Tranh - 2025-07-05/2D Camera 2 - David - Trombone and Dan Tranh - 2025-07-05 iPhone 12 Tuyen Moi/`
-
-**Issue:** This folder is labeled "iPhone 12" but contains GoPro files:
-- `GX010303.MP4`
-- `GX010304.MP4`
-- `GX010305.MP4`
-
-**Action Required:**
-```bash
-# Option 1: Move GoPro files to correct GoPro folder
-mv "/path/to/iPhone 12 Tuyen Moi/GX*.MP4" "/path/to/2D Camera 1 - David.../GoPro 1/"
-
-# Option 2: Rename folder to reflect actual content
-mv "2D Camera 2 - David ... iPhone 12 Tuyen Moi" "2D Camera 3 - David ... GoPro Extra"
-```
-
-**Impact:** Will confuse camera model detection and processing.
-
----
-
-### 4. **Incomplete Folder Names**
-
-**Location:** `/Volumes/X10 Pro 1/Phan Dissertation Data/Matt - MultiCam Data - Voice - 2025-07-14/2D Camera 1 - Name - Instrument - 2025-07-14`
-
-**Issue:** Folder still has template placeholders "Name - Instrument" instead of "Matt - Voice"
-
-**Action Required:**
-```bash
-# Rename to match participant data
-mv "2D Camera 1 - Name - Instrument - 2025-07-14" \
-   "2D Camera 1 - Matt - Voice - 2025-07-14"
-```
-
----
-
-### 5. **Date Incomplete in Folder Name**
-
-**Location:** `/Volumes/X10 Pro 1/Phan Dissertation Data/Sarah - MultiCam Data - Piano - 2025-07-05/iPad Screen - Sarah - Piano - 2025-07-DD`
-
-**Issue:** Date shows "2025-07-DD" instead of actual date "2025-07-05"
-
-**Action Required:**
-```bash
-# Fix the date
-mv "iPad Screen - Sarah - Piano - 2025-07-DD" \
-   "iPad Screen - Sarah - Piano - 2025-07-05"
-```
-
----
-
-## ⚠️ Optional Cleanups (Recommended)
-
-### 6. **macOS Metadata Files (._*)**
-
-These are macOS artifacts created when copying files. Safe to delete:
-
-**Affected participants:** Bryan, Colette, David, Dottie, Jennifer, Justin, Khue, Matt, Nhan, Nicole Collins, Philippe, Quan, Sarah, Sean, Wangling, Yipeng
-
-**Example locations:**
-```
-Bryan/.../._IMG_3705.MOV
-Bryan/.../._RPReplay_Final1752691779.MP4
-Colette/.../._WWKI3939.MP4
-David/.../._IMG_0163.MOV
-... (many more)
-```
-
-**Action:**
-```bash
-# Delete all macOS metadata files
-find "/Volumes/X10 Pro 1/Phan Dissertation Data" -name "._*" -type f -delete
-
-# Verify before deleting (dry run):
-find "/Volumes/X10 Pro 1/Phan Dissertation Data" -name "._*" -type f
-```
-
-**Impact:** These files don't affect processing but clutter the file listing. Safe to delete.
+## ⚠️ Optional Cleanups (Can Skip)
 
 ---
 
@@ -185,17 +164,22 @@ Use this checklist before running the main processing pipeline:
 
 ### Stage 1: Critical Fixes
 
-- [ ] Delete template folders (`Tempate Name` and `Dottie and Emmy shared`)
-- [ ] Fix Sarah's non-standard filename or document exclusion
-- [ ] Move David's misplaced GoPro files to correct folder
-- [ ] Rename Matt's incomplete folder name
-- [ ] Fix Sarah's iPad folder date
+- [x] ~~Delete template folders (`Tempate Name` and `Dottie and Emmy shared`)~~ ✅
+- [x] ~~Fix Sarah's non-standard filename or document exclusion~~ ✅
+- [x] ~~Move David's misplaced GoPro files to correct folder~~ ✅
+- [x] ~~Rename Matt's incomplete folder name~~ ✅
+- [x] ~~Fix Sarah's iPad folder date~~ ✅
 
-### Stage 2: Optional Cleanups
+### Stage 2: New Critical Issues
 
-- [ ] Delete all macOS metadata files (`._*`)
-- [ ] Decide on `.lrv` files (keep or delete)
-- [ ] Verify X3 dual-lens files for David, Dottie, Sarah
+- [ ] **Split Wangling/Justine chunk 003 after conversion to 2D**
+- [ ] **Search for Philippe's missing 360 Camera 1 (X4)**
+
+### Stage 3: Optional Cleanups
+
+- [x] ~~Delete all macOS metadata files (`._*`)~~ ✅
+- [ ] Decide on `.lrv` files (keep or delete) - Can skip
+- [ ] Verify X3 dual-lens files for David, Dottie, Sarah - Can verify during processing
 
 ### Stage 3: Validation
 
@@ -303,5 +287,24 @@ For each issue, you can:
 
 ---
 
-**Last Updated:** 2025-10-20
-**Review Status:** Pending Manual Review
+---
+
+## 📊 Summary Statistics
+
+**Total Issues Found:** 8
+- **Fixed:** 6 ✅
+- **Requires Action:** 2 🚨
+- **Optional:** 1 ⚠️
+
+**Fixes Applied:**
+- Removed duplicate GoPro files: ~64.2 GB freed
+- Deleted macOS metadata: 45+ files
+- Fixed privacy issue: 1 file renamed
+- Duplicated Wangling/Justine chunk 003 files across all drives
+
+**Space Freed:** ~64.2 GB total
+
+---
+
+**Last Updated:** 2025-10-21
+**Review Status:** Most Critical Issues Fixed - 2 Remaining Tasks
