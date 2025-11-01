@@ -33,6 +33,7 @@ class MusicianFrameAnalysis(Base):
     session_id = Column(String(50), nullable=False, index=True)
     video_file = Column(String(255))
     frame_number = Column(Integer, nullable=False)
+    person_id = Column(Integer, nullable=False, default=0, index=True)  # Person identifier (0=left, 1=right, etc.)
     original_time = Column(DECIMAL(10, 3))
     synced_time = Column(DECIMAL(10, 3))
 
@@ -46,15 +47,6 @@ class MusicianFrameAnalysis(Base):
     # Facemesh landmarks (JSON)
     facemesh_landmarks = Column(JSONB)
 
-    # Emotion scores
-    emotion_angry = Column(DECIMAL(4, 3), default=0.000)
-    emotion_disgust = Column(DECIMAL(4, 3), default=0.000)
-    emotion_fear = Column(DECIMAL(4, 3), default=0.000)
-    emotion_happy = Column(DECIMAL(4, 3), default=0.000)
-    emotion_sad = Column(DECIMAL(4, 3), default=0.000)
-    emotion_surprise = Column(DECIMAL(4, 3), default=0.000)
-    emotion_neutral = Column(DECIMAL(4, 3), default=0.000)
-
     # Bad gesture flags
     flag_low_wrists = Column(Boolean, default=False)
     flag_turtle_neck = Column(Boolean, default=False)
@@ -66,14 +58,12 @@ class MusicianFrameAnalysis(Base):
     hand_processing_time_ms = Column(DECIMAL(10, 3), default=0)
     pose_processing_time_ms = Column(DECIMAL(10, 3), default=0)
     facemesh_processing_time_ms = Column(DECIMAL(10, 3), default=0)
-    emotion_processing_time_ms = Column(DECIMAL(10, 3), default=0)
     bad_gesture_processing_time_ms = Column(DECIMAL(10, 3), default=0)
 
     # Model versions
     hand_model = Column(String(50))
     pose_model = Column(String(50))
     facemesh_model = Column(String(50))
-    emotion_model = Column(String(50))
 
     # Transcript reference
     transcript_segment_id = Column(Integer)
@@ -270,6 +260,7 @@ class DatabaseManager:
     def add_frame_to_batch(self,
                           session_id: str,
                           frame_number: int,
+                          person_id: int = 0,  # Person identifier for multi-person videos
                           video_file: Optional[str] = None,
                           original_time: Optional[float] = None,
                           synced_time: Optional[float] = None,
@@ -277,25 +268,49 @@ class DatabaseManager:
                           right_hand_landmarks: Optional[list] = None,
                           pose_landmarks: Optional[list] = None,
                           facemesh_landmarks: Optional[list] = None,
-                          emotions: Optional[dict] = None,
                           bad_gestures: Optional[dict] = None,
                           processing_time_ms: Optional[float] = None,
                           hand_processing_time_ms: Optional[float] = None,
                           pose_processing_time_ms: Optional[float] = None,
                           facemesh_processing_time_ms: Optional[float] = None,
-                          emotion_processing_time_ms: Optional[float] = None,
                           bad_gesture_processing_time_ms: Optional[float] = None,
                           hand_model: Optional[str] = None,
                           pose_model: Optional[str] = None,
                           facemesh_model: Optional[str] = None,
-                          emotion_model: Optional[str] = None,
                           transcript_segment_id: Optional[int] = None) -> bool:
         """Add frame data to batch buffer for later bulk insert"""
+
+        # ✅ FIX: Validate all input data types to prevent .get() errors
+        # Ensure bad_gestures is a dict
+        if bad_gestures is not None and not isinstance(bad_gestures, dict):
+            print(f"⚠️ Warning: bad_gestures is {type(bad_gestures)}, expected dict. Converting to empty dict.")
+            bad_gestures = {}
+
+        # Ensure all landmark data are lists (not dicts or other types)
+        def ensure_list_or_none(value, name):
+            """Ensure value is a list or None, not a dict or other type"""
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return value
+            # If it's a dict, it might be a single landmark - wrap it in a list
+            if isinstance(value, dict):
+                print(f"⚠️ Warning: {name} is dict, expected list. Wrapping in list.")
+                return [value]
+            # For any other type, convert to None
+            print(f"⚠️ Warning: {name} is {type(value)}, expected list. Converting to None.")
+            return None
+
+        left_hand_landmarks = ensure_list_or_none(left_hand_landmarks, 'left_hand_landmarks')
+        right_hand_landmarks = ensure_list_or_none(right_hand_landmarks, 'right_hand_landmarks')
+        pose_landmarks = ensure_list_or_none(pose_landmarks, 'pose_landmarks')
+        facemesh_landmarks = ensure_list_or_none(facemesh_landmarks, 'facemesh_landmarks')
 
         # Prepare data
         data = {
             'session_id': session_id,
             'frame_number': frame_number,
+            'person_id': person_id,  # Add person identifier
             'video_file': video_file,
             'original_time': original_time,
             'synced_time': synced_time,
@@ -307,34 +322,28 @@ class DatabaseManager:
             'hand_processing_time_ms': hand_processing_time_ms or 0,
             'pose_processing_time_ms': pose_processing_time_ms or 0,
             'facemesh_processing_time_ms': facemesh_processing_time_ms or 0,
-            'emotion_processing_time_ms': emotion_processing_time_ms or 0,
             'bad_gesture_processing_time_ms': bad_gesture_processing_time_ms or 0,
             'hand_model': hand_model,
             'pose_model': pose_model,
             'facemesh_model': facemesh_model,
-            'emotion_model': emotion_model,
             'transcript_segment_id': transcript_segment_id
         }
 
-        # Add emotion scores
-        if emotions:
-            data.update({
-                'emotion_angry': emotions.get('angry', 0.0),
-                'emotion_disgust': emotions.get('disgust', 0.0),
-                'emotion_fear': emotions.get('fear', 0.0),
-                'emotion_happy': emotions.get('happy', 0.0),
-                'emotion_sad': emotions.get('sad', 0.0),
-                'emotion_surprise': emotions.get('surprise', 0.0),
-                'emotion_neutral': emotions.get('neutral', 0.0)
-            })
-
-        # Add bad gesture flags
-        if bad_gestures:
+        # Add bad gesture flags with safe access
+        if bad_gestures and isinstance(bad_gestures, dict):
             data.update({
                 'flag_low_wrists': bool(bad_gestures.get('low_wrists', False)),
                 'flag_turtle_neck': bool(bad_gestures.get('turtle_neck', False)),
                 'flag_hunched_back': bool(bad_gestures.get('hunched_back', False)),
                 'flag_fingers_pointing_up': bool(bad_gestures.get('fingers_pointing_up', False))
+            })
+        else:
+            # Default all flags to False if bad_gestures is None or invalid
+            data.update({
+                'flag_low_wrists': False,
+                'flag_turtle_neck': False,
+                'flag_hunched_back': False,
+                'flag_fingers_pointing_up': False
             })
 
         # Add to batch
@@ -439,25 +448,6 @@ class DatabaseManager:
             print(f"❌ Error getting bad gesture summary: {e}")
             return None
 
-    def get_emotion_summary(self, session_id: str):
-        """Get average emotion scores for a session"""
-        try:
-            data = self.get_session_data(session_id)
-
-            if data:
-                emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
-                summary = {}
-
-                for emotion in emotions:
-                    col_name = f'emotion_{emotion}'
-                    values = [float(row.get(col_name, 0)) for row in data if row.get(col_name) is not None]
-                    summary[emotion] = sum(values) / len(values) if values else 0.0
-
-                return summary
-            return None
-        except Exception as e:
-            print(f"❌ Error getting emotion summary: {e}")
-            return None
 
     def insert_video_alignment(self, source: str, start_time_offset: float,
                               matching_duration: float = 0.0, camera_type: int = None) -> bool:

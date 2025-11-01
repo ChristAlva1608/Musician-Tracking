@@ -1,24 +1,30 @@
+# Configuration for Detecting 2 People - Landmark Extraction (Full Frames)
+# This configuration extracts landmarks for 2 people with bad gesture detection OFF
+# Video: VID_20250709_203100_00_010-f.mp4
+
 bad_gestures:
-  detect_fingers_pointing_up: true
-  detect_hunched_back: true
-  detect_low_wrists: true
-  detect_turtle_neck: true
+  # ALL BAD GESTURE DETECTION DISABLED FOR LANDMARK EXTRACTION ONLY
+  detect_fingers_pointing_up: false
+  detect_hunched_back: false
+  detect_low_wrists: false
+  detect_turtle_neck: false
   thresholds:
     finger_vertical_angle: 45  # Angle from vertical in degrees (pinky detection)
     spine_vertical_angle: 20  # Spine tilt from vertical (hunched back method 1)
     upper_lower_spine_angle: 160  # Upper/lower spine angle (hunched back method 2)
     low_wrist_threshold: 0.1
     turtle_neck_angle: 30
+
 database:
   batch_size: 50
   batch_timeout: 5
-  enabled: true
-  link_frame_to_transcript: true
-  save_transcript_segments: true
+  enabled: true  # ENABLED - Store landmarks to database
+  link_frame_to_transcript: false  # Transcript disabled
+  save_transcript_segments: false  # Transcript disabled
   store_chunk_video_alignment: true
-  store_musician_frame_analysis: true
+  store_musician_frame_analysis: true  # IMPORTANT: Store all landmark data
   store_processing_jobs: true
-  store_transcript_video: true
+  store_transcript_video: false
   table_name: musician_frame_analysis
   # Database type: 'local' for local PostgreSQL, 'supabase' for Supabase
   use_database_type: local
@@ -33,27 +39,39 @@ database:
     name: musician-tracking
     user: christalva
     password: ''
+
 detection:
-  # Multi-person detection settings (MediaPipe tasks API)
-  num_poses: 2       # Maximum number of people for pose detection (default: 2)
-  num_hands: 4       # Maximum number of hands to detect (default: 4, supports 2 people)
-  num_faces: 2       # Maximum number of faces to detect (default: 2)
+  # ============================================
+  # MULTI-PERSON DETECTION SETTINGS (2 PEOPLE)
+  # ============================================
+  num_poses: 2       # Detect 2 people (one pose per person)
+  num_hands: 4       # Detect 4 hands total (2 hands per person)
+  num_faces: 2       # Detect 2 faces (one face per person)
 
   use_two_stage_hand: false  # Use two-stage hand detection for higher accuracy
-  face_confidence: 0.5
-  facemesh_confidence: 0.5
-  facemesh_model: yolo+mediapipe
+
+  # Model selection - OPTIMIZED FOR LANDMARK EXTRACTION
+  hand_model: mediapipe      # MediaPipe for 3D hand landmarks
+  pose_model: mediapipe      # MediaPipe for 3D world coordinates
+  facemesh_model: yolo+mediapipe  # YOLO for face detection + MediaPipe for landmarks
+  transcript_model: none     # DISABLED - Not needed for landmark extraction
+
+  # Confidence thresholds
   hand_confidence: 0.5
-  hand_model: mediapipe
   pose_confidence: 0.5
-  pose_model: mediapipe
-  transcript_model: whisper
+  facemesh_confidence: 0.5
+  face_confidence: 0.5
+
+  # Transcript settings (DISABLED for faster processing)
   transcript_settings:
     chunk_duration: 15
-    enabled: true
+    enabled: false  # DISABLED - Not needed for landmark extraction
     language: en
     model_size: tiny
+
+  # Model paths
   yolo_face_model_path: src/checkpoints/yolov8n-face.pt
+
 heatmap:
   enabled: false
   gaussian_sigma: 10
@@ -61,6 +79,7 @@ heatmap:
   - 640
   - 480
   update_interval: 5
+
 integrated_processor:
   aligned_videos_dir: src/output/aligned_videos
   alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician-Tracking/src/video/multi-cam video/vid_shot1/original_video
@@ -71,15 +90,15 @@ integrated_processor:
   detector_config:
     database:
       enabled: true
-    display_output: false  # Show visualization window during processing
+    display_output: true  # Show visualization window during processing
     video:
       generate_report: true
       preserve_audio: true
       process_matching_duration_only: true
       save_output_video: true
       use_webcam: false
-  limit_processing_duration: false  # Set to false to process entire videos without time limit
-  max_processing_duration: 10  # Only used if limit_processing_duration is true
+  limit_processing_duration: true  # Set to false to process entire videos without time limit
+  max_processing_duration: 30  # Only used if limit_processing_duration is true
   preserve_original_audio: true
   processing_type: full_frames  # Options: 'use_offset' (skip to sync point), 'full_frames' (process entire video)
   run_detection: true
@@ -99,37 +118,36 @@ integrated_processor:
     stack_direction: vertical  # Options: 'vertical' (stack top-to-bottom), 'horizontal' (stack left-to-right)
   unified_videos: true
   unified_videos_dir: src/output/unified_videos
+
 logging:
   level: INFO
   log_file: tracking.log
   save_to_file: true
+
 performance:
   buffer_size: 100
   gpu_enabled: true
   max_workers: 4
+
 video:
-  display_output: true
-  generate_report: true
+  display_output: true  # Show processing window
+  generate_report: true  # Generate detection statistics report
   output_format: mp4
-  output_video_path: src/output/original_video_cam_1_sk_0.mp4
+  output_video_path: src/output/annotated_video_VID_20250709_203100_00_010-f.mp4
   preserve_audio: true
-  process_matching_duration_only: true
-  report_path: src/analysis/detection_report.txt
-  save_output_video: true
-  skip_frames: 0
-  source_path: /Volumes/Extreme_Pro/Mitou Project/Musician-Tracking/src/video/multi-cam video/vid_shot1/original_video/cam_1.mp4
+  process_matching_duration_only: false  # FULL FRAMES - Process entire video
+  report_path: src/analysis/2person_landmarks_report_f.txt
+  save_output_video: true  # Save annotated video with landmarks
+  skip_frames: 0  # Process every frame (no skipping)
+  source_path: /Users/christalva/Desktop/Computer Science Hub/Mitou Project/Musician-Tracking/src/video/VID_20250709_203100_00_010-f.mp4
   temp_video_path: src/output/temp_video_no_audio.mp4
   use_webcam: false
+
 video_aligner:
   alignment:
     correlation_threshold: 0.3
     enable_chunk_processing: true  # Options: true (multi-chunk videos like cam_1_1.mp4, cam_1_2.mp4), false (single files like cam_1.mp4)
     max_offset_search: 60
-    # reference_strategy is now auto-determined by processing_type:
-    #   - processing_type: full_frames → earliest_start (all content)
-    #   - processing_type: use_offset → latest_start (synchronized only)
-    #   - unified_videos: true → earliest_start (full timeline needed)
-    # reference_strategy: earliest_start  # DEPRECATED: auto-paired with processing_type
   alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician-Tracking/src/video/multi-cam video/vid_shot1/original_video
   audio:
     extraction_duration: 120

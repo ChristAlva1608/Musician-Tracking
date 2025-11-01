@@ -30,10 +30,17 @@ from src.models.facemesh.mediapipe import MediaPipeFaceMeshDetector
 from src.models.face.yolo import YOLOFaceDetector
 
 # Import bad gesture detection (3D version uses MediaPipe x,y,z world coordinates)
-from src.bad_gesture.detector_3d import BadGestureDetector3D
+from src.bad_gesture.bad_gestures_3d import BadGestureDetector3D
 
-from src.models.emotion.deepface import DeepFaceEmotionDetector
-from src.models.emotion.ghostfacenet import GhostFaceNetEmotionDetector
+# Import person tracking utilities
+from src.utils.person_tracker_enhanced import PersonTrackerWithHistory
+
+# Import spatial matching utilities
+from src.utils.hand_person_matcher import (
+    match_hands_to_people_from_results,
+    get_person_hand_landmarks,
+    assign_faces_to_people
+)
 
 # Import database
 from src.database.database_setup_v2 import DatabaseManager, TranscriptVideo
@@ -74,13 +81,11 @@ class DetectorV2:
             'successful_hand_detections': 0,
             'successful_pose_detections': 0,
             'successful_facemesh_detections': 0,
-            'successful_emotion_detections': 0,
             'successful_transcript_detections': 0,
             'total_processing_times': {
                 'hand': 0,
                 'pose': 0,
                 'face': 0,
-                'emotion': 0,
                 'bad_gestures': 0,
                 'transcript': 0,
                 'total': 0
@@ -118,7 +123,6 @@ class DetectorV2:
         self.hand_detector = self._init_hand_detector()
         self.pose_detector = self._init_pose_detector()
         self.facemesh_detector = self._init_facemesh_detector()
-        self.emotion_detector = self._init_emotion_detector()
         self.bad_gesture_detector = self._init_bad_gesture_detector()
         self.transcript_detector = self._init_transcript_detector()
         
@@ -126,13 +130,19 @@ class DetectorV2:
         self.db = None
         if self.config['database'].get('enabled', False):
             self._init_database()
-        
+
+        # Initialize enhanced person tracker for consistent ID tracking across frames
+        self.person_tracker = PersonTrackerWithHistory(
+            max_history_frames=30,  # Keep 30 frames of history (1 second at 30fps)
+            max_disappeared_frames=15,  # Allow person to disappear for 15 frames before recycling ID
+            distance_threshold=0.15  # Maximum centroid movement between frames (15% of frame)
+        )
+
         print(f"✅ DetectorV2 initialized")
         print(f"📝 Session ID: {self.session_id}")
-        print(f"🤚 Hand Model: {self.config['detection'].get('hand_model', 'none')}")
-        print(f"🏃 Pose Model: {self.config['detection'].get('pose_model', 'none')}")
-        print(f"😊 Face Model: {self.config['detection'].get('facemesh_model', 'none')}")
-        print(f"😢 Emotion Model: {self.config['detection'].get('emotion_model', 'none')}")
+        print(f"🤚 Hand Model: {self.config['detection'].get('hand_model', 'none')} - Detector: {'✅ Loaded' if self.hand_detector else '❌ Not loaded'}")
+        print(f"🏃 Pose Model: {self.config['detection'].get('pose_model', 'none')} - Detector: {'✅ Loaded' if self.pose_detector else '❌ Not loaded'}")
+        print(f"😊 Face Model: {self.config['detection'].get('facemesh_model', 'none')} - Detector: {'✅ Loaded' if self.facemesh_detector else '❌ Not loaded'}")
         print(f"🎤 Transcript Model: {self.config['detection'].get('transcript_model', 'none')}")
         print(f"⚠️ Bad Gestures: {'Enabled' if self.bad_gesture_detector else 'Disabled'}")
         print(f"💾 Database: {'Enabled' if self.db else 'Disabled'}")
@@ -169,8 +179,7 @@ class DetectorV2:
             'detection': {
                 'hand_model': 'mediapipe',
                 'pose_model': 'mediapipe',
-                'facemesh_model': 'mediapipe',
-                'emotion_model': 'none'
+                'facemesh_model': 'mediapipe'
             }
         }
     
@@ -178,9 +187,13 @@ class DetectorV2:
         """Initialize hand detection model based on config"""
         model_type = self.config['detection'].get('hand_model', 'none').lower()
         confidence = self.config['detection'].get('hand_confidence', 0.5)
-        
+        num_hands = self.config['detection'].get('num_hands', 2)  # Default: 4 hands (2 people)
+
         if model_type == 'mediapipe':
-            return MediaPipeHandDetector(min_detection_confidence=confidence)
+            return MediaPipeHandDetector(
+                min_detection_confidence=confidence,
+                num_hands=num_hands
+            )
         elif model_type == 'yolo':
             return YOLOHandDetector(confidence=confidence)
         else:
@@ -190,9 +203,13 @@ class DetectorV2:
         """Initialize pose detection model based on config"""
         model_type = self.config['detection'].get('pose_model', 'none').lower()
         confidence = self.config['detection'].get('pose_confidence', 0.5)
-        
+        num_poses = self.config['detection'].get('num_poses', 1)  # Default: 2 people
+
         if model_type == 'mediapipe':
-            return MediaPipePoseDetector(min_detection_confidence=confidence)
+            return MediaPipePoseDetector(
+                min_detection_confidence=confidence,
+                num_poses=num_poses
+            )
         elif model_type == 'yolo':
             return YOLOPoseDetector(confidence=confidence)
         else:
@@ -202,10 +219,14 @@ class DetectorV2:
         """Initialize face detection model based on config"""
         model_type = self.config['detection'].get('facemesh_model', 'none').lower()
         confidence = self.config['detection'].get('facemesh_confidence', 0.5)
-        
+        num_faces = self.config['detection'].get('num_faces', 1)  # Default: 2 faces
+
         if model_type == 'mediapipe':
             # Option 1: Only MediaPipe FaceMesh (similar to test_facemesh_mediapipe.py)
-            return MediaPipeFaceMeshDetector(min_detection_confidence=confidence)
+            return MediaPipeFaceMeshDetector(
+                min_detection_confidence=confidence,
+                num_faces=num_faces
+            )
         elif model_type == 'yolo+mediapipe':
             # Option 2: YOLO face detection + MediaPipe FaceMesh (similar to test_facemesh_yolo_mediapipe.py)
             face_confidence = self.config['detection'].get('face_confidence', 0.5)
@@ -223,36 +244,31 @@ class DetectorV2:
                 model_path=yolo_model_path if os.path.exists(yolo_model_path) else None,
                 confidence=face_confidence
             )
-            facemesh_detector = MediaPipeFaceMeshDetector(min_detection_confidence=confidence)
-            
+            facemesh_detector = MediaPipeFaceMeshDetector(
+                min_detection_confidence=confidence,
+                num_faces=num_faces
+            )
+
             # Return both as a tuple to indicate hybrid approach
             return {'yolo': yolo_detector, 'mediapipe': facemesh_detector, 'type': 'hybrid'}
         else:
             return None
-    
-    def _init_emotion_detector(self):
-        """Initialize emotion detection model based on config"""
-        model_type = self.config['detection'].get('emotion_model', 'none').lower()
-        
-        if model_type == 'deepface':
-            settings = self.config['detection']['emotion_settings']['deepface']
-            return DeepFaceEmotionDetector(
-                model_name=settings.get('model_name', 'Facenet'),
-                detector_backend=settings.get('detector_backend', 'retinaface'),
-                enforce_detection=settings.get('enforce_detection', False)
-            )
-        elif model_type == 'ghostfacenet':
-            settings = self.config['detection']['emotion_settings']['ghostfacenet']
-            return GhostFaceNetEmotionDetector(
-                model_version=settings.get('model_version', 'v2'),
-                batch_size=settings.get('batch_size', 32)
-            )
-        else:
-            return None
-    
+
     def _init_bad_gesture_detector(self):
         """Initialize enhanced 3D bad gesture detector based on config"""
         bad_gesture_config = self.config.get('bad_gestures', {})
+
+        # Check if any bad gesture detection is enabled
+        any_enabled = (
+            bad_gesture_config.get('detect_low_wrists', False) or
+            bad_gesture_config.get('detect_turtle_neck', False) or
+            bad_gesture_config.get('detect_hunched_back', False) or
+            bad_gesture_config.get('detect_fingers_pointing_up', False)
+        )
+
+        if not any_enabled:
+            return None  # Don't initialize if all disabled
+
         # Disable detector's built-in drawing since we handle it in draw_results
         return BadGestureDetector3D(config=bad_gesture_config, draw_on_frame=False)
     
@@ -378,7 +394,6 @@ class DetectorV2:
             'hand': self.hand_detector is not None,
             'pose': self.pose_detector is not None,
             'face': self.facemesh_detector is not None,
-            'emotion': self.emotion_detector is not None,
             'transcript': self.transcript_detector is not None,
             'bad_gestures': self.bad_gesture_detector is not None,
             'database': self.db is not None
@@ -404,32 +419,37 @@ class DetectorV2:
         # Hand detection - using world landmarks for database storage and bad gesture detection
         if self.hand_detector:
             start_time = time.time()
-            left_hand_landmarks = None
-            right_hand_landmarks = None
-            hand_raw_results = None
+            left_hand_landmarks_3d_dict = None  # For database storage
+            right_hand_landmarks_3d_dict = None  # For database storage
+            hand_landmarks_3d_raw = None  # For bad gesture detection (hand_world_landmarks)
             hand_bboxes = []
 
             # Detect hands in frame
             hand_results = self.hand_detector.detect(frame)
 
             # Extract world landmarks (3D coordinates) with handedness
-            if hand_results and hasattr(hand_results, 'multi_hand_world_landmarks') and hand_results.multi_hand_world_landmarks:
+            # MediaPipe Tasks API: hand_world_landmarks (not multi_hand_world_landmarks)
+            if hand_results and hasattr(hand_results, 'hand_world_landmarks') and hand_results.hand_world_landmarks:
+                # Store raw 3D world landmarks for bad gesture detection (will reuse later)
+                hand_landmarks_3d_raw = hand_results.hand_world_landmarks
+
                 # Extract handedness information (Left/Right) from MediaPipe results
                 hand_handedness_list = []
-                if hasattr(hand_results, 'multi_handedness') and hand_results.multi_handedness:
-                    for handedness in hand_results.multi_handedness:
-                        # MediaPipe handedness: classification[0].label is 'Left' or 'Right'
-                        label = handedness.classification[0].label
+                if hasattr(hand_results, 'handedness') and hand_results.handedness:
+                    for handedness_list in hand_results.handedness:
+                        # MediaPipe Tasks API: handedness is List[List[Category]]
+                        # category_name is 'Left' or 'Right'
+                        label = handedness_list[0].category_name
                         hand_handedness_list.append(label)
 
-                # Process each detected hand
-                for hand_idx, world_hand_landmarks in enumerate(hand_results.multi_hand_world_landmarks):
+                # Process each detected hand - convert to dict format for database
+                for hand_idx, world_hand_landmarks in enumerate(hand_results.hand_world_landmarks):
                     # Determine handedness for this hand
                     handedness = hand_handedness_list[hand_idx] if hand_idx < len(hand_handedness_list) else None
 
-                    # Convert world landmarks to dictionary format
+                    # Convert world landmarks to dictionary format (for database storage)
                     world_landmarks_dict = []
-                    for landmark in world_hand_landmarks.landmark:
+                    for landmark in world_hand_landmarks:
                         world_landmarks_dict.append({
                             'x': float(landmark.x),  # World coordinate in meters
                             'y': float(landmark.y),  # World coordinate in meters
@@ -439,29 +459,35 @@ class DetectorV2:
                     # Assign to left or right hand based on handedness
                     if world_landmarks_dict and handedness:
                         if handedness == 'Left':
-                            left_hand_landmarks = world_landmarks_dict
+                            left_hand_landmarks_3d_dict = world_landmarks_dict
                         elif handedness == 'Right':
-                            right_hand_landmarks = world_landmarks_dict
+                            right_hand_landmarks_3d_dict = world_landmarks_dict
 
                 # Calculate bounding boxes from screen landmarks for visualization
-                if hasattr(hand_results, 'multi_hand_landmarks') and hand_results.multi_hand_landmarks:
-                    for hand_landmark_set in hand_results.multi_hand_landmarks:
+                # MediaPipe Tasks API: hand_landmarks (not multi_hand_landmarks)
+                if hasattr(hand_results, 'hand_landmarks') and hand_results.hand_landmarks:
+                    for hand_landmark_list in hand_results.hand_landmarks:
+                        # Convert list to object with .landmark attribute for compatibility
+                        class LandmarkList:
+                            def __init__(self, landmarks):
+                                self.landmark = landmarks
+
+                        hand_landmark_set = LandmarkList(hand_landmark_list)
                         bbox = self._get_hand_bbox_from_landmarks(hand_landmark_set, frame.shape)
                         if bbox:
                             hand_bboxes.append(bbox)
 
-                # Store raw results for visualization
-                hand_raw_results = hand_results
-
-            results['left_hand_landmarks'] = left_hand_landmarks
-            results['right_hand_landmarks'] = right_hand_landmarks
-            results['hand_raw_results'] = hand_raw_results
+            results['left_hand_landmarks_3d_dict'] = left_hand_landmarks_3d_dict
+            results['right_hand_landmarks_3d_dict'] = right_hand_landmarks_3d_dict
+            results['hand_landmarks_3d_raw'] = hand_landmarks_3d_raw
+            results['hand_results'] = hand_results  # For drawing
             results['hand_bboxes'] = hand_bboxes if hand_bboxes else None
             results['processing_times']['hand'] = float(f"{(time.time() - start_time) * 1000:.3f}")
         else:
-            results['left_hand_landmarks'] = None
-            results['right_hand_landmarks'] = None
-            results['hand_raw_results'] = None
+            results['left_hand_landmarks_3d_dict'] = None
+            results['right_hand_landmarks_3d_dict'] = None
+            results['hand_landmarks_3d_raw'] = None
+            results['hand_results'] = None
             results['hand_bboxes'] = None
             results['processing_times']['hand'] = 0
 
@@ -469,13 +495,44 @@ class DetectorV2:
         if self.pose_detector:
             start_time = time.time()
             pose_results = self.pose_detector.detect(frame)
-            pose_landmarks = self.pose_detector.convert_to_dict(pose_results)
-            results['pose_landmarks'] = pose_landmarks
-            results['pose_raw_results'] = pose_results  # Store raw results for drawing
+
+            # Convert to dict format for tracking
+            pose_landmarks_3d_dict = self.pose_detector.convert_to_dict_multi_person(pose_results)
+
+            # Update enhanced person tracker to maintain consistent IDs across frames
+            # Returns: {stable_person_id: pose_landmarks_dict}
+            tracked_poses = self.person_tracker.update(
+                frame_number=self.frame_count,
+                pose_landmarks_multi=pose_landmarks_3d_dict
+            )
+
+            # Convert tracked poses back to list format for compatibility
+            # Sort by person_id to ensure consistent ordering
+            sorted_person_ids = sorted(tracked_poses.keys())
+            pose_landmarks_3d_dict = [tracked_poses[pid] for pid in sorted_person_ids]
+
+            # Store person ID mapping for later use in database export
+            results['person_id_mapping'] = {idx: pid for idx, pid in enumerate(sorted_person_ids)}
+
+            # Extract raw 3D world landmarks for bad gesture detection
+            pose_landmarks_3d_raw = None
+            if pose_results and hasattr(pose_results, 'pose_world_landmarks') and pose_results.pose_world_landmarks:
+                pose_landmarks_3d_raw = pose_results.pose_world_landmarks
+
+            results['pose_landmarks_3d_dict'] = pose_landmarks_3d_dict  # List of people: [[person0_landmarks], [person1_landmarks], ...]
+            results['pose_landmarks_3d_raw'] = pose_landmarks_3d_raw  # MediaPipe raw format
+            results['pose_results'] = pose_results  # For drawing
             results['processing_times']['pose'] = float(f"{(time.time() - start_time) * 1000:.3f}")
         else:
-            results['pose_landmarks'] = None
-            results['pose_raw_results'] = None
+            # Still update tracker with empty detections to track disappeared persons
+            self.person_tracker.update(
+                frame_number=self.frame_count,
+                pose_landmarks_multi=[]
+            )
+            results['pose_landmarks_3d_dict'] = None
+            results['pose_landmarks_3d_raw'] = None
+            results['pose_results'] = None
+            results['person_id_mapping'] = {}
             results['processing_times']['pose'] = 0
 
 
@@ -491,18 +548,18 @@ class DetectorV2:
                 # Step 1: YOLO Face Detection
                 yolo_results = yolo_detector.detect(frame)
                 face_bboxes = yolo_detector.extract_bboxes_with_pad(yolo_results, frame.shape, padding=30)
-                
-                face_landmarks = []
+
+                face_landmarks_per_face = []  # ✅ FIXED: List of faces, each face is a list of landmarks
                 if face_bboxes:
                     # Step 2: Apply MediaPipe FaceMesh to each cropped face region
                     for bbox in face_bboxes:
                         x_pad, y_pad, w_pad, h_pad = bbox['x_pad'], bbox['y_pad'], bbox['w_pad'], bbox['h_pad']
                         face_crop = frame[y_pad:y_pad+h_pad, x_pad:x_pad+w_pad]
-                        
+
                         if face_crop.size > 0:
                             facemesh_results = facemesh_detector.detect(face_crop)
                             crop_landmarks = facemesh_detector.convert_to_dict(facemesh_results)
-                            
+
                             if crop_landmarks and len(crop_landmarks) > 0:
                                 # Convert landmarks back to original frame coordinates
                                 # IMPORTANT: Keep z-coordinate for 3D world data!
@@ -523,9 +580,10 @@ class DetectorV2:
                                         'z': orig_z,  # ✅ Now preserving z-coordinate!
                                         'confidence': landmark.get('confidence', 1.0)
                                     })
-                                face_landmarks.extend(adjusted_landmarks)
-                
-                results['facemesh_landmarks'] = face_landmarks if face_landmarks else None
+                                # ✅ FIXED: Append as separate face, not extend
+                                face_landmarks_per_face.append(adjusted_landmarks)
+
+                results['facemesh_landmarks'] = face_landmarks_per_face if face_landmarks_per_face else None
                 results['face_bboxes'] = face_bboxes  # Store YOLO bounding boxes for drawing
                 results['facemesh_raw_results'] = {'yolo': yolo_results, 'mediapipe': None}  # Store raw results for drawing
             else:
@@ -542,46 +600,16 @@ class DetectorV2:
             results['face_bboxes'] = None
             results['facemesh_raw_results'] = None
             results['processing_times']['face'] = 0
-        
-        # Emotion detection
-        if self.emotion_detector:
-            start_time = time.time()
-            emotion_results = self.emotion_detector.detect(frame)
-            emotion_data = self.emotion_detector.convert_to_dict(emotion_results)
-            if emotion_data:
-                results['emotions'] = emotion_data.get('emotions', {})
-                results['dominant_emotion'] = emotion_data.get('dominant_emotion', 'neutral')
-            else:
-                results['emotions'] = {}
-                results['dominant_emotion'] = None
-            results['processing_times']['emotion'] = float(f"{(time.time() - start_time) * 1000:.3f}")
-        else:
-            results['emotions'] = {}
-            results['dominant_emotion'] = None
-            results['processing_times']['emotion'] = 0
-        
+
         # Bad gesture detection
         if self.bad_gesture_detector:
             start_time = time.time()
 
-            # Extract 3D world landmarks for gesture detection
-            hand_landmarks_3d = None
-            pose_landmarks_3d = None
-
-            # Extract hand 3D world landmarks
-            if results['hand_raw_results'] and self.config['detection'].get('hand_model', 'none').lower() == 'mediapipe':
-                # For MediaPipe hand model, extract 3D world landmarks
-                hand_landmarks_3d = results['hand_raw_results'].multi_hand_world_landmarks if hasattr(results['hand_raw_results'], 'multi_hand_world_landmarks') else None
-
-            # Extract pose 3D world landmarks
-            if results['pose_raw_results'] and self.config['detection'].get('pose_model', 'none').lower() == 'mediapipe':
-                # For MediaPipe pose model, extract 3D world landmarks
-                pose_landmarks_3d = results['pose_raw_results'].pose_world_landmarks if hasattr(results['pose_raw_results'], 'pose_world_landmarks') else None
-
+            # Reuse already-extracted 3D world landmarks (no duplication!)
             bad_gestures = self.bad_gesture_detector.detect_all_gestures(
                 frame=frame,
-                hand_landmarks=hand_landmarks_3d,
-                pose_landmarks=pose_landmarks_3d
+                hand_landmarks=results['hand_landmarks_3d_raw'],
+                pose_landmarks=results['pose_landmarks_3d_raw']
             )
             
             results['bad_gestures'] = bad_gestures
@@ -620,8 +648,6 @@ class DetectorV2:
         Returns:
             Tuple of (start_time_offset, matching_duration) in seconds
         """
-        print(f"🔍 Getting alignment data for: {video_file}")
-
         # Determine which alignment method to use based on processing configuration
         if self.process_matching_duration_only:
             preferred_method = 'latest_start'
@@ -788,9 +814,7 @@ class DetectorV2:
             vid_shot_parts = [part for part in path_parts if part.startswith('vid_shot')]
             if vid_shot_parts:
                 source_name = vid_shot_parts[0]
-            
-            print(f"🔍 Looking for alignment data: source={source_name}, camera_type={camera_type}")
-            
+
             # Get alignment data
             result = self.alignment_db.supabase.table('video_alignment_offsets').select('*').eq(
                 'source', source_name
@@ -813,25 +837,22 @@ class DetectorV2:
     def _update_statistics(self, results: Dict[str, Any]):
         """Update statistics for report generation"""
         self.stats['total_frames'] += 1
-        
+
         # Count successful detections
-        if results.get('left_hand_landmarks') or results.get('right_hand_landmarks'):
+        if results.get('left_hand_landmarks_3d_dict') or results.get('right_hand_landmarks_3d_dict'):
             self.stats['successful_hand_detections'] += 1
-        
-        if results.get('pose_landmarks'):
+
+        if results.get('pose_landmarks_3d_dict'):
             self.stats['successful_pose_detections'] += 1
-        
+
         if results.get('facemesh_landmarks'):
             self.stats['successful_facemesh_detections'] += 1
-        
-        if results.get('dominant_emotion'):
-            self.stats['successful_emotion_detections'] += 1
-        
+
         if results['processing_times'].get('transcript', 0) > 0:
             self.stats['successful_transcript_detections'] += 1
-        
+
         # Accumulate processing times
-        for key in ['hand', 'pose', 'face', 'emotion', 'bad_gestures', 'transcript', 'total']:
+        for key in ['hand', 'pose', 'face', 'bad_gestures', 'transcript', 'total']:
             self.stats['total_processing_times'][key] += results['processing_times'].get(key, 0)
     
     def save_to_database(self, results: Dict[str, Any], video_file: str = None):
@@ -878,33 +899,154 @@ class DetectorV2:
             if not self.config['database'].get('store_musician_frame_analysis', True):
                 return  # Skip saving frame data if disabled
 
-            # Add frame to batch
-            self.db.add_frame_to_batch(
-                session_id=self.session_id,
-                frame_number=results['frame_number'],
-                video_file=video_file,
-                original_time=float(f"{original_time:.3f}"),
-                synced_time=float(f"{synced_time:.3f}"),
-                left_hand_landmarks=results.get('left_hand_landmarks'),
-                right_hand_landmarks=results.get('right_hand_landmarks'),
-                pose_landmarks=results.get('pose_landmarks'),
-                facemesh_landmarks=results.get('facemesh_landmarks'),
-                emotions=results.get('emotions', {}),
-                bad_gestures=results.get('bad_gestures', {}),
-                processing_time_ms=results['processing_times']['total'],
-                hand_processing_time_ms=results['processing_times']['hand'],
-                pose_processing_time_ms=results['processing_times']['pose'],
-                facemesh_processing_time_ms=results['processing_times']['face'],
-                emotion_processing_time_ms=results['processing_times']['emotion'],
-                bad_gesture_processing_time_ms=results['processing_times']['bad_gestures'],
-                hand_model=self.config['detection'].get('hand_model'),
-                pose_model=self.config['detection'].get('pose_model'),
-                facemesh_model=self.config['detection'].get('facemesh_model'),
-                emotion_model=self.config['detection'].get('emotion_model'),
-                transcript_segment_id=transcript_segment_id  # Reference to transcript_video table
+            # ============================================================
+            # MULTI-PERSON SUPPORT: Create separate record for each person
+            # ============================================================
+
+            # Extract multi-person data
+            pose_landmarks_multi = results.get('pose_landmarks_3d_dict', [])  # List of people's poses
+            facemesh_landmarks_list = results.get('facemesh_landmarks', [])  # List of faces
+            hand_results = results.get('hand_results')  # MediaPipe hand results
+
+            # Determine number of people detected (based on pose detection)
+            num_people = len(pose_landmarks_multi) if pose_landmarks_multi else 0
+
+            # If no people detected, store data with person_id = 0 (backward compatibility)
+            if num_people == 0:
+                # Handle facemesh_landmarks properly - take first face if it's a list of faces
+                face_data = None
+                if facemesh_landmarks_list:
+                    if isinstance(facemesh_landmarks_list, list) and len(facemesh_landmarks_list) > 0:
+                        # Check if it's a list of faces (each face is a list)
+                        if isinstance(facemesh_landmarks_list[0], list):
+                            # It's a list of faces, take the first one
+                            face_data = facemesh_landmarks_list[0]
+                        elif isinstance(facemesh_landmarks_list[0], dict):
+                            # It's a flat list of landmarks (single face)
+                            face_data = facemesh_landmarks_list
+
+                self.db.add_frame_to_batch(
+                    session_id=self.session_id,
+                    frame_number=results['frame_number'],
+                    person_id=0,
+                    video_file=video_file,
+                    original_time=float(f"{original_time:.3f}"),
+                    synced_time=float(f"{synced_time:.3f}"),
+                    left_hand_landmarks=results.get('left_hand_landmarks_3d_dict'),
+                    right_hand_landmarks=results.get('right_hand_landmarks_3d_dict'),
+                    pose_landmarks=None,
+                    facemesh_landmarks=face_data,
+                    bad_gestures=results.get('bad_gestures', {}),
+                    processing_time_ms=results['processing_times']['total'],
+                    hand_processing_time_ms=results['processing_times']['hand'],
+                    pose_processing_time_ms=results['processing_times']['pose'],
+                    facemesh_processing_time_ms=results['processing_times']['face'],
+                    bad_gesture_processing_time_ms=results['processing_times']['bad_gestures'],
+                    hand_model=self.config['detection'].get('hand_model'),
+                    pose_model=self.config['detection'].get('pose_model'),
+                    facemesh_model=self.config['detection'].get('facemesh_model'),
+                    transcript_segment_id=transcript_segment_id
+                )
+                return
+
+            # ============================================================
+            # SPATIAL MATCHING: HANDS AND FACES TO PEOPLE
+            # ============================================================
+
+            # Match detected hands to people based on wrist proximity
+            matched_hands = match_hands_to_people_from_results(
+                hand_results,
+                pose_landmarks_multi,
+                self.hand_detector
             )
+
+            # Match detected faces to people based on nose proximity
+            face_bboxes = results.get('face_bboxes', [])
+            matched_face_bboxes = assign_faces_to_people(
+                face_bboxes,
+                pose_landmarks_multi,
+                max_distance_threshold=0.3  # Adjust if needed
+            )
+
+            # Map face landmarks to matched faces
+            # facemesh_landmarks_list can be:
+            # 1. List of faces (YOLO+MediaPipe): [[face0_landmarks], [face1_landmarks]]
+            # 2. Flat list (MediaPipe-only): [landmark0, landmark1, ...]
+            matched_face_landmarks = {}
+
+            if facemesh_landmarks_list:
+                if face_bboxes:
+                    # YOLO+MediaPipe case: Match faces spatially
+                    # Create mapping from bbox to landmarks (both lists should be in same order)
+                    for _face_idx, (bbox, landmarks) in enumerate(zip(face_bboxes, facemesh_landmarks_list)):
+                        # Find which person this bbox was matched to
+                        for person_idx, matched_bbox in matched_face_bboxes.items():
+                            if matched_bbox and matched_bbox == bbox:
+                                matched_face_landmarks[person_idx] = landmarks
+                                break
+                else:
+                    # MediaPipe-only case: Assign to person 0 if single person
+                    # Check if it's a flat list (single person) or list of faces
+                    if len(facemesh_landmarks_list) > 0:
+                        first_elem = facemesh_landmarks_list[0]
+                        if isinstance(first_elem, dict) and 'x' in first_elem:
+                            # Flat list of landmarks - assign to person 0
+                            if num_people >= 1:
+                                matched_face_landmarks[0] = facemesh_landmarks_list
+                        elif isinstance(first_elem, list):
+                            # List of faces - assign by index
+                            for person_idx in range(min(num_people, len(facemesh_landmarks_list))):
+                                matched_face_landmarks[person_idx] = facemesh_landmarks_list[person_idx]
+
+            # Get stable person ID mapping from tracker
+            person_id_mapping = results.get('person_id_mapping', {})
+
+            # Save a record for each person
+            for person_idx in range(num_people):
+                # Extract this person's landmarks
+                person_pose = pose_landmarks_multi[person_idx] if person_idx < len(pose_landmarks_multi) else None
+
+                # Get spatially matched hands for this person
+                person_left_hand, person_right_hand = get_person_hand_landmarks(person_idx, matched_hands)
+
+                # Get spatially matched face for this person
+                person_face = matched_face_landmarks.get(person_idx, None)
+
+                # Bad gestures: Only apply to first person for now
+                person_bad_gestures = results.get('bad_gestures', {}) if person_idx == 0 else {}
+
+                # Get stable person_id from tracker (maintains identity across frames)
+                stable_person_id = person_id_mapping.get(person_idx, person_idx)
+
+                # Save to database with stable person_id
+                self.db.add_frame_to_batch(
+                    session_id=self.session_id,
+                    frame_number=results['frame_number'],
+                    person_id=stable_person_id,  # 👈 Stable person ID from enhanced tracker (consistent across frames)
+                    video_file=video_file,
+                    original_time=float(f"{original_time:.3f}"),
+                    synced_time=float(f"{synced_time:.3f}"),
+                    left_hand_landmarks=person_left_hand,  # ✅ Spatially matched to this person
+                    right_hand_landmarks=person_right_hand,  # ✅ Spatially matched to this person
+                    pose_landmarks=person_pose,
+                    facemesh_landmarks=person_face,
+                    bad_gestures=person_bad_gestures,
+                    processing_time_ms=results['processing_times']['total'],
+                    hand_processing_time_ms=results['processing_times']['hand'],
+                    pose_processing_time_ms=results['processing_times']['pose'],
+                    facemesh_processing_time_ms=results['processing_times']['face'],
+                    bad_gesture_processing_time_ms=results['processing_times']['bad_gestures'],
+                    hand_model=self.config['detection'].get('hand_model'),
+                    pose_model=self.config['detection'].get('pose_model'),
+                    facemesh_model=self.config['detection'].get('facemesh_model'),
+                    transcript_segment_id=transcript_segment_id
+                )
         except Exception as e:
+            import traceback
             print(f"❌ Error saving to database: {e}")
+            print(f"   Error type: {type(e).__name__}")
+            print(f"   Traceback:")
+            traceback.print_exc()
     
     def _save_transcript_segments_to_db(self):
         """Save transcript segments to transcript_video table"""
@@ -998,8 +1140,6 @@ class DetectorV2:
             return False
 
         try:
-            print(f"🔍 Checking for existing transcripts for: {video_file}")
-
             if self.db.use_local:
                 # Local PostgreSQL - use SQLAlchemy
                 session = self.db.get_session()
@@ -1156,19 +1296,17 @@ class DetectorV2:
         hand_success_rate = (self.stats['successful_hand_detections'] / self.stats['total_frames']) * 100
         pose_success_rate = (self.stats['successful_pose_detections'] / self.stats['total_frames']) * 100
         facemesh_success_rate = (self.stats['successful_facemesh_detections'] / self.stats['total_frames']) * 100
-        emotion_success_rate = (self.stats['successful_emotion_detections'] / self.stats['total_frames']) * 100
         transcript_success_rate = (self.stats['successful_transcript_detections'] / self.stats['total_frames']) * 100
-        
+
         # Calculate average processing times
         avg_times = {}
-        for key in ['hand', 'pose', 'face', 'emotion', 'bad_gestures', 'transcript', 'total']:
+        for key in ['hand', 'pose', 'face', 'bad_gestures', 'transcript', 'total']:
             avg_times[key] = self.stats['total_processing_times'][key] / self.stats['total_frames']
-        
+
         # Get model names
         hand_model = self.config['detection'].get('hand_model', 'none')
         pose_model = self.config['detection'].get('pose_model', 'none')
         facemesh_model = self.config['detection'].get('facemesh_model', 'none')
-        emotion_model = self.config['detection'].get('emotion_model', 'none')
         transcript_model = self.config['detection'].get('transcript_model', 'none')
         
         # Generate report content
@@ -1187,9 +1325,8 @@ BASIC INFORMATION:
 
 MODEL CONFIGURATION:
 - Hand: {hand_model}
-- Pose: {pose_model}  
+- Pose: {pose_model}
 - Facemesh: {facemesh_model}
-- Emotion: {emotion_model}
 - Transcript: {transcript_model}
 - Bad Gestures: {'enabled' if self.bad_gesture_detector else 'disabled'}
 
@@ -1197,14 +1334,12 @@ DETECTION SUCCESS RATES:
 - Hand detection: {hand_success_rate:.1f}% ({self.stats['successful_hand_detections']}/{self.stats['total_frames']} frames)
 - Pose detection: {pose_success_rate:.1f}% ({self.stats['successful_pose_detections']}/{self.stats['total_frames']} frames)
 - Facemesh detection: {facemesh_success_rate:.1f}% ({self.stats['successful_facemesh_detections']}/{self.stats['total_frames']} frames)
-- Emotion detection: {emotion_success_rate:.1f}% ({self.stats['successful_emotion_detections']}/{self.stats['total_frames']} frames)
 - Transcript detection: {transcript_success_rate:.1f}% ({self.stats['successful_transcript_detections']}/{self.stats['total_frames']} frames)
 
 AVERAGE PROCESSING TIMES:
 - Hand: {avg_times['hand']:.3f}ms
 - Pose: {avg_times['pose']:.3f}ms
 - Facemesh: {avg_times['face']:.3f}ms
-- Emotion: {avg_times['emotion']:.3f}ms
 - Bad Gestures: {avg_times['bad_gestures']:.3f}ms
 - Transcript: {avg_times['transcript']:.3f}ms
 - Total per frame: {avg_times['total']:.3f}ms
@@ -1213,7 +1348,6 @@ TOTAL PROCESSING TIMES:
 - Hand: {self.stats['total_processing_times']['hand']:.0f}ms
 - Pose: {self.stats['total_processing_times']['pose']:.0f}ms
 - Facemesh: {self.stats['total_processing_times']['face']:.0f}ms
-- Emotion: {self.stats['total_processing_times']['emotion']:.0f}ms
 - Bad Gestures: {self.stats['total_processing_times']['bad_gestures']:.0f}ms
 - Transcript: {self.stats['total_processing_times']['transcript']:.0f}ms
 - Total: {self.stats['total_processing_times']['total']:.0f}ms
@@ -1242,19 +1376,20 @@ PERFORMANCE METRICS:
     def draw_results(self, frame: np.ndarray, results: Dict[str, Any]) -> np.ndarray:
         """
         Draw detection results on frame
-        
+
         Args:
             frame: Input frame
             results: Processing results
-            
+
         Returns:
             Frame with drawn annotations
         """
         annotated_frame = frame.copy()
-        
+
         # Draw hand landmarks using model's draw_landmarks method
-        if self.hand_detector and results.get('hand_raw_results'):
-            annotated_frame = self.hand_detector.draw_landmarks(annotated_frame, results['hand_raw_results'])
+        if self.hand_detector and results.get('hand_results'):
+            hand_results = results['hand_results']
+            annotated_frame = self.hand_detector.draw_landmarks(annotated_frame, results['hand_results'])
 
         # Draw hand bounding boxes if available (from two-stage detection)
         if results.get('hand_bboxes'):
@@ -1284,8 +1419,35 @@ PERFORMANCE METRICS:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
         
         # Draw pose landmarks using model's draw_landmarks method
-        if self.pose_detector and results.get('pose_raw_results'):
-            annotated_frame = self.pose_detector.draw_landmarks(annotated_frame, results['pose_raw_results'])
+        if self.pose_detector and results.get('pose_results'):
+            pose_results = results['pose_results']
+            annotated_frame = self.pose_detector.draw_landmarks(annotated_frame, results['pose_results'])
+
+            # Draw stable person IDs on each detected person
+            person_id_mapping = results.get('person_id_mapping', {})
+            pose_landmarks_multi = results.get('pose_landmarks_3d_dict', [])
+
+            if pose_landmarks_multi and person_id_mapping:
+                height, width = annotated_frame.shape[:2]
+                for idx, stable_id in person_id_mapping.items():
+                    if idx < len(pose_landmarks_multi):
+                        # Get nose position (landmark 0) for label placement
+                        pose = pose_landmarks_multi[idx]
+                        if pose and len(pose) > 0:
+                            nose = pose[0]
+                            nose_x = int(nose['x'] * width)
+                            nose_y = int(nose['y'] * height) - 30
+
+                            # Color based on stable ID (consistent across frames)
+                            colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 255, 0)]
+                            color = colors[stable_id % len(colors)]
+
+                            # Draw person ID label
+                            label = f"Person {stable_id}"
+                            cv2.putText(annotated_frame, label, (nose_x, nose_y),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                            cv2.putText(annotated_frame, label, (nose_x, nose_y),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
         
         # Draw face landmarks using model's draw_landmarks method
         if self.facemesh_detector and results.get('facemesh_raw_results'):
@@ -1293,17 +1455,43 @@ PERFORMANCE METRICS:
                 # For hybrid approach, draw YOLO bounding boxes
                 if results['facemesh_raw_results']['yolo']:
                     yolo_detector = self.facemesh_detector['yolo']
-                    annotated_frame = yolo_detector.draw_bboxes(annotated_frame, results['facemesh_raw_results']['yolo'], 
+                    annotated_frame = yolo_detector.draw_bboxes(annotated_frame, results['facemesh_raw_results']['yolo'],
                                                               draw_padding=True, padding=30)
                 
-                # Draw MediaPipe face mesh if available (currently not implemented in hybrid mode)
-                # The face mesh landmarks are already processed and stored in results['facemesh_landmarks']
+                # Draw MediaPipe face mesh with connections for hybrid mode
                 if results.get('facemesh_landmarks'):
-                    for landmark in results['facemesh_landmarks']:
-                        x, y = int(landmark['x']), int(landmark['y'])
-                        cv2.circle(annotated_frame, (x, y), 1, (0, 255, 0), -1)
+                    # Convert landmarks to normalized format for drawing
+                    from mediapipe.framework.formats import landmark_pb2
+                    import mediapipe as mp
+
+                    # Get frame dimensions for normalization
+                    height, width = annotated_frame.shape[:2]
+
+                    # facemesh_landmarks is a list of faces, each face is a list of landmarks
+                    for face_landmarks in results['facemesh_landmarks']:
+                        # Create normalized landmark list for this face
+                        face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+                        for landmark in face_landmarks:
+                            face_landmarks_proto.landmark.append(
+                                landmark_pb2.NormalizedLandmark(
+                                    x=landmark['x'] / width,
+                                    y=landmark['y'] / height,
+                                    z=landmark.get('z', 0.0)
+                                )
+                            )
+
+                        # Draw landmarks with connections (use legacy API for compatibility)
+                        mp.solutions.drawing_utils.draw_landmarks(
+                            annotated_frame,
+                            face_landmarks_proto,
+                            mp.solutions.face_mesh.FACEMESH_TESSELATION,
+                            mp.solutions.drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=1, circle_radius=1),
+                            mp.solutions.drawing_utils.DrawingSpec(color=(0, 200, 0), thickness=1)
+                        )
             else:
                 # Standard MediaPipe FaceMesh approach
+                face_results = results['facemesh_raw_results']
+
                 annotated_frame = self.facemesh_detector.draw_landmarks(annotated_frame, results['facemesh_raw_results'])
         
         # Add comprehensive annotation text
@@ -1355,12 +1543,6 @@ PERFORMANCE METRICS:
         
         # Move all processing times to right corner
         self._draw_processing_times_right_corner(annotated_frame, results)
-        
-        # Draw emotion result if available
-        if results.get('dominant_emotion'):
-            y_offset += line_height
-            cv2.putText(annotated_frame, f"Detected emotion: {results['dominant_emotion']}",
-                       (10, y_offset), font, font_scale, (0, 255, 0), thickness)
 
         # Draw bad gesture warnings in center of frame
         if results.get('bad_gestures'):
@@ -1489,7 +1671,6 @@ PERFORMANCE METRICS:
             ("Hand", self.config['detection'].get('hand_model', 'none'), results['processing_times'].get('hand', 0), (0, 255, 255)),
             ("Pose", self.config['detection'].get('pose_model', 'none'), results['processing_times'].get('pose', 0), (255, 0, 255)),
             ("Face", self.config['detection'].get('facemesh_model', 'none'), results['processing_times'].get('face', 0), (0, 255, 0)),
-            ("Emotion", self.config['detection'].get('emotion_model', 'none'), results['processing_times'].get('emotion', 0), (255, 128, 0)),
             ("BadGest", "enabled" if self.bad_gesture_detector else "disabled", results['processing_times'].get('bad_gestures', 0), (255, 0, 255)),
             ("TOTAL", "", results['processing_times'].get('total', 0), (0, 0, 255))
         ]
@@ -1530,7 +1711,6 @@ PERFORMANCE METRICS:
 
             # Check if transcripts already exist in database
             if self.db and self.config['database'].get('enabled', False):
-                print(f"🔍 Checking for existing transcripts in database...")
                 if self._load_existing_transcripts(video_file):
                     print(f"✅ Using existing transcripts from database (skipping re-processing)")
                     print(f"   📊 {len(self.transcript_data)} segments loaded")
@@ -1883,8 +2063,6 @@ PERFORMANCE METRICS:
                 self.facemesh_detector['mediapipe'].cleanup()
             else:
                 self.facemesh_detector.cleanup()
-        if self.emotion_detector:
-            self.emotion_detector.cleanup()
         if self.bad_gesture_detector:
             self.bad_gesture_detector.cleanup()
         if self.transcript_detector:

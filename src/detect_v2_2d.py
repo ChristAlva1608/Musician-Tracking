@@ -30,10 +30,7 @@ from src.models.facemesh.mediapipe import MediaPipeFaceMeshDetector
 from src.models.face.yolo import YOLOFaceDetector
 
 # Import bad gesture detection (2D version uses screen x,y coordinates)
-from src.bad_gesture.detector_2d import BadGestureDetector
-
-from src.models.emotion.deepface import DeepFaceEmotionDetector
-from src.models.emotion.ghostfacenet import GhostFaceNetEmotionDetector
+from src.bad_gesture.bad_gestures_2d import BadGestureDetector
 
 # Import database
 from src.database.database_setup_v2 import DatabaseManager, TranscriptVideo
@@ -74,13 +71,11 @@ class DetectorV2:
             'successful_hand_detections': 0,
             'successful_pose_detections': 0,
             'successful_facemesh_detections': 0,
-            'successful_emotion_detections': 0,
             'successful_transcript_detections': 0,
             'total_processing_times': {
                 'hand': 0,
                 'pose': 0,
                 'face': 0,
-                'emotion': 0,
                 'bad_gestures': 0,
                 'transcript': 0,
                 'total': 0
@@ -118,7 +113,6 @@ class DetectorV2:
         self.hand_detector = self._init_hand_detector()
         self.pose_detector = self._init_pose_detector()
         self.facemesh_detector = self._init_facemesh_detector()
-        self.emotion_detector = self._init_emotion_detector()
         self.bad_gesture_detector = self._init_bad_gesture_detector()
         self.transcript_detector = self._init_transcript_detector()
         
@@ -132,7 +126,6 @@ class DetectorV2:
         print(f"🤚 Hand Model: {self.config['detection'].get('hand_model', 'none')}")
         print(f"🏃 Pose Model: {self.config['detection'].get('pose_model', 'none')}")
         print(f"😊 Face Model: {self.config['detection'].get('facemesh_model', 'none')}")
-        print(f"😢 Emotion Model: {self.config['detection'].get('emotion_model', 'none')}")
         print(f"🎤 Transcript Model: {self.config['detection'].get('transcript_model', 'none')}")
         print(f"⚠️ Bad Gestures: {'Enabled' if self.bad_gesture_detector else 'Disabled'}")
         print(f"💾 Database: {'Enabled' if self.db else 'Disabled'}")
@@ -169,8 +162,7 @@ class DetectorV2:
             'detection': {
                 'hand_model': 'mediapipe',
                 'pose_model': 'mediapipe',
-                'facemesh_model': 'mediapipe',
-                'emotion_model': 'none'
+                'facemesh_model': 'mediapipe'
             }
         }
     
@@ -229,27 +221,7 @@ class DetectorV2:
             return {'yolo': yolo_detector, 'mediapipe': facemesh_detector, 'type': 'hybrid'}
         else:
             return None
-    
-    def _init_emotion_detector(self):
-        """Initialize emotion detection model based on config"""
-        model_type = self.config['detection'].get('emotion_model', 'none').lower()
-        
-        if model_type == 'deepface':
-            settings = self.config['detection']['emotion_settings']['deepface']
-            return DeepFaceEmotionDetector(
-                model_name=settings.get('model_name', 'Facenet'),
-                detector_backend=settings.get('detector_backend', 'retinaface'),
-                enforce_detection=settings.get('enforce_detection', False)
-            )
-        elif model_type == 'ghostfacenet':
-            settings = self.config['detection']['emotion_settings']['ghostfacenet']
-            return GhostFaceNetEmotionDetector(
-                model_version=settings.get('model_version', 'v2'),
-                batch_size=settings.get('batch_size', 32)
-            )
-        else:
-            return None
-    
+
     def _init_bad_gesture_detector(self):
         """Initialize 2D bad gesture detector based on config"""
         bad_gesture_config = self.config.get('bad_gestures', {})
@@ -377,7 +349,6 @@ class DetectorV2:
             'hand': self.hand_detector is not None,
             'pose': self.pose_detector is not None,
             'face': self.facemesh_detector is not None,
-            'emotion': self.emotion_detector is not None,
             'transcript': self.transcript_detector is not None,
             'bad_gestures': self.bad_gesture_detector is not None,
             'database': self.db is not None
@@ -551,24 +522,7 @@ class DetectorV2:
             results['face_bboxes'] = None
             results['facemesh_raw_results'] = None
             results['processing_times']['face'] = 0
-        
-        # Emotion detection
-        if self.emotion_detector:
-            start_time = time.time()
-            emotion_results = self.emotion_detector.detect(frame)
-            emotion_data = self.emotion_detector.convert_to_dict(emotion_results)
-            if emotion_data:
-                results['emotions'] = emotion_data.get('emotions', {})
-                results['dominant_emotion'] = emotion_data.get('dominant_emotion', 'neutral')
-            else:
-                results['emotions'] = {}
-                results['dominant_emotion'] = None
-            results['processing_times']['emotion'] = float(f"{(time.time() - start_time) * 1000:.3f}")
-        else:
-            results['emotions'] = {}
-            results['dominant_emotion'] = None
-            results['processing_times']['emotion'] = 0
-        
+
         # Bad gesture detection
         if self.bad_gesture_detector:
             start_time = time.time()
@@ -822,25 +776,22 @@ class DetectorV2:
     def _update_statistics(self, results: Dict[str, Any]):
         """Update statistics for report generation"""
         self.stats['total_frames'] += 1
-        
+
         # Count successful detections
         if results.get('left_hand_landmarks') or results.get('right_hand_landmarks'):
             self.stats['successful_hand_detections'] += 1
-        
+
         if results.get('pose_landmarks'):
             self.stats['successful_pose_detections'] += 1
-        
+
         if results.get('facemesh_landmarks'):
             self.stats['successful_facemesh_detections'] += 1
-        
-        if results.get('dominant_emotion'):
-            self.stats['successful_emotion_detections'] += 1
-        
+
         if results['processing_times'].get('transcript', 0) > 0:
             self.stats['successful_transcript_detections'] += 1
-        
+
         # Accumulate processing times
-        for key in ['hand', 'pose', 'face', 'emotion', 'bad_gestures', 'transcript', 'total']:
+        for key in ['hand', 'pose', 'face', 'bad_gestures', 'transcript', 'total']:
             self.stats['total_processing_times'][key] += results['processing_times'].get(key, 0)
     
     def save_to_database(self, results: Dict[str, Any], video_file: str = None):
@@ -897,18 +848,15 @@ class DetectorV2:
                 right_hand_landmarks=results.get('right_hand_landmarks'),
                 pose_landmarks=results.get('pose_landmarks'),
                 facemesh_landmarks=results.get('facemesh_landmarks'),
-                emotions=results.get('emotions', {}),
                 bad_gestures=results.get('bad_gestures', {}),
                 processing_time_ms=results['processing_times']['total'],
                 hand_processing_time_ms=results['processing_times']['hand'],
                 pose_processing_time_ms=results['processing_times']['pose'],
                 facemesh_processing_time_ms=results['processing_times']['face'],
-                emotion_processing_time_ms=results['processing_times']['emotion'],
                 bad_gesture_processing_time_ms=results['processing_times']['bad_gestures'],
                 hand_model=self.config['detection'].get('hand_model'),
                 pose_model=self.config['detection'].get('pose_model'),
                 facemesh_model=self.config['detection'].get('facemesh_model'),
-                emotion_model=self.config['detection'].get('emotion_model'),
                 transcript_segment_id=transcript_segment_id  # Reference to transcript_video table
             )
         except Exception as e:
@@ -1247,19 +1195,17 @@ class DetectorV2:
         hand_success_rate = (self.stats['successful_hand_detections'] / self.stats['total_frames']) * 100
         pose_success_rate = (self.stats['successful_pose_detections'] / self.stats['total_frames']) * 100
         facemesh_success_rate = (self.stats['successful_facemesh_detections'] / self.stats['total_frames']) * 100
-        emotion_success_rate = (self.stats['successful_emotion_detections'] / self.stats['total_frames']) * 100
         transcript_success_rate = (self.stats['successful_transcript_detections'] / self.stats['total_frames']) * 100
-        
+
         # Calculate average processing times
         avg_times = {}
-        for key in ['hand', 'pose', 'face', 'emotion', 'bad_gestures', 'transcript', 'total']:
+        for key in ['hand', 'pose', 'face', 'bad_gestures', 'transcript', 'total']:
             avg_times[key] = self.stats['total_processing_times'][key] / self.stats['total_frames']
-        
+
         # Get model names
         hand_model = self.config['detection'].get('hand_model', 'none')
         pose_model = self.config['detection'].get('pose_model', 'none')
         facemesh_model = self.config['detection'].get('facemesh_model', 'none')
-        emotion_model = self.config['detection'].get('emotion_model', 'none')
         transcript_model = self.config['detection'].get('transcript_model', 'none')
         
         # Generate report content
@@ -1278,9 +1224,8 @@ BASIC INFORMATION:
 
 MODEL CONFIGURATION:
 - Hand: {hand_model}
-- Pose: {pose_model}  
+- Pose: {pose_model}
 - Facemesh: {facemesh_model}
-- Emotion: {emotion_model}
 - Transcript: {transcript_model}
 - Bad Gestures: {'enabled' if self.bad_gesture_detector else 'disabled'}
 
@@ -1288,14 +1233,12 @@ DETECTION SUCCESS RATES:
 - Hand detection: {hand_success_rate:.1f}% ({self.stats['successful_hand_detections']}/{self.stats['total_frames']} frames)
 - Pose detection: {pose_success_rate:.1f}% ({self.stats['successful_pose_detections']}/{self.stats['total_frames']} frames)
 - Facemesh detection: {facemesh_success_rate:.1f}% ({self.stats['successful_facemesh_detections']}/{self.stats['total_frames']} frames)
-- Emotion detection: {emotion_success_rate:.1f}% ({self.stats['successful_emotion_detections']}/{self.stats['total_frames']} frames)
 - Transcript detection: {transcript_success_rate:.1f}% ({self.stats['successful_transcript_detections']}/{self.stats['total_frames']} frames)
 
 AVERAGE PROCESSING TIMES:
 - Hand: {avg_times['hand']:.3f}ms
 - Pose: {avg_times['pose']:.3f}ms
 - Facemesh: {avg_times['face']:.3f}ms
-- Emotion: {avg_times['emotion']:.3f}ms
 - Bad Gestures: {avg_times['bad_gestures']:.3f}ms
 - Transcript: {avg_times['transcript']:.3f}ms
 - Total per frame: {avg_times['total']:.3f}ms
@@ -1304,7 +1247,6 @@ TOTAL PROCESSING TIMES:
 - Hand: {self.stats['total_processing_times']['hand']:.0f}ms
 - Pose: {self.stats['total_processing_times']['pose']:.0f}ms
 - Facemesh: {self.stats['total_processing_times']['face']:.0f}ms
-- Emotion: {self.stats['total_processing_times']['emotion']:.0f}ms
 - Bad Gestures: {self.stats['total_processing_times']['bad_gestures']:.0f}ms
 - Transcript: {self.stats['total_processing_times']['transcript']:.0f}ms
 - Total: {self.stats['total_processing_times']['total']:.0f}ms
@@ -1446,13 +1388,7 @@ PERFORMANCE METRICS:
         
         # Move all processing times to right corner
         self._draw_processing_times_right_corner(annotated_frame, results)
-        
-        # Draw emotion result if available
-        if results.get('dominant_emotion'):
-            y_offset += line_height
-            cv2.putText(annotated_frame, f"Detected emotion: {results['dominant_emotion']}", 
-                       (10, y_offset), font, font_scale, (0, 255, 0), thickness)
-        
+
         # Bad gesture annotations removed (but detection still runs in background)
         
         # Add transcript overlay if available
@@ -1503,9 +1439,8 @@ PERFORMANCE METRICS:
         # Processing time data
         processing_data = [
             ("Hand", self.config['detection'].get('hand_model', 'none'), results['processing_times'].get('hand', 0), (0, 255, 255)),
-            ("Pose", self.config['detection'].get('pose_model', 'none'), results['processing_times'].get('pose', 0), (255, 0, 255)), 
+            ("Pose", self.config['detection'].get('pose_model', 'none'), results['processing_times'].get('pose', 0), (255, 0, 255)),
             ("Face", self.config['detection'].get('facemesh_model', 'none'), results['processing_times'].get('face', 0), (0, 255, 0)),
-            ("Emotion", self.config['detection'].get('emotion_model', 'none'), results['processing_times'].get('emotion', 0), (255, 128, 0)),
             ("BadGest", "enabled" if self.bad_gesture_detector else "disabled", results['processing_times'].get('bad_gestures', 0), (255, 0, 255)),
             ("Transcript", self.config['detection'].get('transcript_model', 'none'), results['processing_times'].get('transcript', 0), (0, 255, 255)),
             ("TOTAL", "", results['processing_times'].get('total', 0), (0, 0, 255))
@@ -1894,8 +1829,6 @@ PERFORMANCE METRICS:
                 self.facemesh_detector['mediapipe'].cleanup()
             else:
                 self.facemesh_detector.cleanup()
-        if self.emotion_detector:
-            self.emotion_detector.cleanup()
         if self.bad_gesture_detector:
             self.bad_gesture_detector.cleanup()
         if self.transcript_detector:

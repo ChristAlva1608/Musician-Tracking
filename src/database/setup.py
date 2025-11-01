@@ -6,6 +6,10 @@ import time
 from datetime import datetime
 import yaml
 from pathlib import Path
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, DECIMAL, SmallInteger, VARCHAR
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.sql import func
 
 # Load config from YAML
 def load_config():
@@ -15,6 +19,41 @@ def load_config():
         return yaml.safe_load(f)
 
 CONFIG = load_config()
+
+# SQLAlchemy Base for ORM models
+Base = declarative_base()
+
+# SQLAlchemy models for local PostgreSQL
+class VideoAlignmentOffset(Base):
+    """Model for video_alignment_offsets table"""
+    __tablename__ = 'video_alignment_offsets'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(Text, nullable=False, unique=True)
+    camera_type = Column(SmallInteger)
+    start_time_offset = Column(DECIMAL(10, 3), nullable=False, default=0.000)
+    matching_duration = Column(DECIMAL(10, 3), nullable=False, default=0.000)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class ChunkVideoAlignmentOffset(Base):
+    """Model for chunk_video_alignment_offsets table"""
+    __tablename__ = 'chunk_video_alignment_offsets'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(VARCHAR(100), nullable=False)
+    session_id = Column(VARCHAR(50))
+    chunk_filename = Column(VARCHAR(255), nullable=False)
+    camera_prefix = Column(VARCHAR(50), nullable=False)
+    chunk_order = Column(Integer, nullable=False)
+    start_time_offset = Column(DECIMAL(10, 3), nullable=False, default=0.000)
+    chunk_duration = Column(DECIMAL(10, 3), nullable=False, default=0.000)
+    reference_camera_prefix = Column(VARCHAR(50))
+    reference_chunk_filename = Column(VARCHAR(255))
+    correlation_score = Column(DECIMAL(6, 4))
+    method_type = Column(Text, default='earliest_start')
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class MusicianDatabase:
     def __init__(self, table_name: str = 'musician_frame_analysis', config: Optional[dict] = None):
@@ -74,16 +113,7 @@ class MusicianDatabase:
             
             -- Pose landmarks (JSON)
             pose_landmarks JSONB,        -- [{x, y, z, confidence}, ...] 17-33 points
-            
-            -- Emotion scores (0.0 - 1.0)
-            emotion_angry DECIMAL(4,3) DEFAULT 0.000,
-            emotion_disgust DECIMAL(4,3) DEFAULT 0.000,
-            emotion_fear DECIMAL(4,3) DEFAULT 0.000,
-            emotion_happy DECIMAL(4,3) DEFAULT 0.000,
-            emotion_sad DECIMAL(4,3) DEFAULT 0.000,
-            emotion_surprise DECIMAL(4,3) DEFAULT 0.000,
-            emotion_neutral DECIMAL(4,3) DEFAULT 0.000,
-            
+
             -- Bad gesture detection flags
             flag_low_wrists BOOLEAN DEFAULT FALSE,
             flag_turtle_neck BOOLEAN DEFAULT FALSE,
@@ -130,7 +160,7 @@ class MusicianDatabase:
             print("💡 Please create the tables manually in Supabase SQL Editor using the provided SQL.")
             return False
     
-    def add_frame_to_batch(self, 
+    def add_frame_to_batch(self,
                           session_id: str,
                           frame_number: int,
                           video_file: Optional[str] = None,
@@ -140,18 +170,15 @@ class MusicianDatabase:
                           right_hand_landmarks: Optional[list] = None,
                           pose_landmarks: Optional[list] = None,
                           facemesh_landmarks: Optional[list] = None,
-                          emotions: Optional[dict] = None,
                           bad_gestures: Optional[dict] = None,
                           processing_time_ms: Optional[float] = None,
                           hand_processing_time_ms: Optional[float] = None,
                           pose_processing_time_ms: Optional[float] = None,
                           facemesh_processing_time_ms: Optional[float] = None,
-                          emotion_processing_time_ms: Optional[float] = None,
                           bad_gesture_processing_time_ms: Optional[float] = None,
                           hand_model: Optional[str] = None,
                           pose_model: Optional[str] = None,
                           facemesh_model: Optional[str] = None,
-                          emotion_model: Optional[str] = None,
                           transcript_segment_id: Optional[int] = None) -> bool:
         """
         Add frame data to batch buffer for later bulk insert
@@ -173,27 +200,13 @@ class MusicianDatabase:
             'hand_processing_time_ms': hand_processing_time_ms or 0,
             'pose_processing_time_ms': pose_processing_time_ms or 0,
             'facemesh_processing_time_ms': facemesh_processing_time_ms or 0,
-            'emotion_processing_time_ms': emotion_processing_time_ms or 0,
             'bad_gesture_processing_time_ms': bad_gesture_processing_time_ms or 0,
             'hand_model': hand_model,
             'pose_model': pose_model,
             'facemesh_model': facemesh_model,
-            'emotion_model': emotion_model,
             'transcript_segment_id': transcript_segment_id
         }
-        
-        # Add emotion scores
-        if emotions:
-            data.update({
-                'emotion_angry': emotions.get('angry', 0.0),
-                'emotion_disgust': emotions.get('disgust', 0.0),
-                'emotion_fear': emotions.get('fear', 0.0),
-                'emotion_happy': emotions.get('happy', 0.0),
-                'emotion_sad': emotions.get('sad', 0.0),
-                'emotion_surprise': emotions.get('surprise', 0.0),
-                'emotion_neutral': emotions.get('neutral', 0.0)
-            })
-        
+
         # Add bad gesture flags (ensure Python bool type for JSON serialization)
         if bad_gestures:
             data.update({
@@ -259,7 +272,7 @@ class MusicianDatabase:
             self.flush_batch()
         print("📪 Database connection closed")
     
-    def insert_frame_data(self, 
+    def insert_frame_data(self,
                          session_id: str,
                          frame_number: int,
                          video_file: Optional[str] = None,
@@ -269,20 +282,17 @@ class MusicianDatabase:
                          right_hand_landmarks: Optional[list] = None,
                          pose_landmarks: Optional[list] = None,
                          facemesh_landmarks: Optional[list] = None,
-                         emotions: Optional[dict] = None,
                          bad_gestures: Optional[dict] = None,
                          processing_time_ms: Optional[int] = None,
                          hand_processing_time_ms: Optional[int] = None,
                          pose_processing_time_ms: Optional[int] = None,
                          facemesh_processing_time_ms: Optional[int] = None,
-                         emotion_processing_time_ms: Optional[int] = None,
                          hand_model: Optional[str] = None,
                          pose_model: Optional[str] = None,
-                         facemesh_model: Optional[str] = None,
-                         emotion_model: Optional[str] = None) -> bool:
+                         facemesh_model: Optional[str] = None) -> bool:
         """
         Insert frame analysis data into the database
-        
+
         Args:
             session_id: Unique identifier for the session
             frame_number: Frame number in the video
@@ -293,17 +303,14 @@ class MusicianDatabase:
             right_hand_landmarks: List of right hand landmark points
             pose_landmarks: List of pose landmark points
             facemesh_landmarks: List of face mesh landmark points
-            emotions: Dictionary of emotion scores
             bad_gestures: Dictionary of bad gesture flags
             processing_time_ms: Total time taken to process this frame
             hand_processing_time_ms: Time taken for hand detection
             pose_processing_time_ms: Time taken for pose detection
             facemesh_processing_time_ms: Time taken for face mesh detection
-            emotion_processing_time_ms: Time taken for emotion detection
             hand_model: Hand detection model used (e.g., "mediapipe")
             pose_model: Pose detection model used (e.g., "yolo", "mediapipe")
             facemesh_model: Face mesh model used (e.g., "mediapipe", "yolo")
-            emotion_model: Emotion detection model used (e.g., "deepface", "fer")
         """
         
         # Prepare data for insertion
@@ -321,25 +328,11 @@ class MusicianDatabase:
             'hand_processing_time_ms': hand_processing_time_ms or 0,
             'pose_processing_time_ms': pose_processing_time_ms or 0,
             'facemesh_processing_time_ms': facemesh_processing_time_ms or 0,
-            'emotion_processing_time_ms': emotion_processing_time_ms or 0,
             'hand_model': hand_model,
             'pose_model': pose_model,
-            'facemesh_model': facemesh_model,
-            'emotion_model': emotion_model
+            'facemesh_model': facemesh_model
         }
-        
-        # Add emotion scores
-        if emotions:
-            data.update({
-                'emotion_angry': emotions.get('angry', 0.0),
-                'emotion_disgust': emotions.get('disgust', 0.0),
-                'emotion_fear': emotions.get('fear', 0.0),
-                'emotion_happy': emotions.get('happy', 0.0),
-                'emotion_sad': emotions.get('sad', 0.0),
-                'emotion_surprise': emotions.get('surprise', 0.0),
-                'emotion_neutral': emotions.get('neutral', 0.0)
-            })
-        
+
         # Add bad gesture flags (ensure Python bool type for JSON serialization)
         if bad_gestures:
             data.update({
@@ -398,45 +391,67 @@ class MusicianDatabase:
         except Exception as e:
             print(f"❌ Error getting bad gesture summary: {e}")
             return None
-    
-    def get_emotion_summary(self, session_id: str):
-        """
-        Get average emotion scores for a session
-        """
-        try:
-            result = self.supabase.table(self.table_name).select(
-                'emotion_angry, emotion_disgust, emotion_fear, emotion_happy, emotion_sad, emotion_surprise, emotion_neutral'
-            ).eq('session_id', session_id).execute()
-            
-            if result.data:
-                emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
-                summary = {}
-                
-                for emotion in emotions:
-                    col_name = f'emotion_{emotion}'
-                    values = [row[col_name] for row in result.data if row[col_name] is not None]
-                    summary[emotion] = sum(values) / len(values) if values else 0.0
-                
-                return summary
-            return None
-        except Exception as e:
-            print(f"❌ Error getting emotion summary: {e}")
-            return None
 
 
 
 class VideoAlignmentDatabase:
-    def __init__(self, config: Optional[dict] = None):
-        """Initialize Supabase connection for video alignment operations
+    def __init__(self, use_local: Optional[bool] = None, config: Optional[dict] = None):
+        """Initialize database connection for video alignment operations
 
         Args:
+            use_local: If True, use local PostgreSQL. If False, use Supabase.
+                      If None, read from config file
             config: Configuration dictionary. If None, will load from config_v1.yaml
         """
         # Load config if not provided
         if config is None:
             config = CONFIG
 
-        supabase_config = config.get('database', {}).get('supabase', {})
+        # Determine which database to use
+        if use_local is None:
+            db_type = config.get('database', {}).get('use_database_type', 'local').lower()
+            self.use_local = (db_type == 'local')
+        else:
+            self.use_local = use_local
+
+        self.config = config
+
+        if self.use_local:
+            self._init_local_postgres()
+        else:
+            self._init_supabase()
+
+    def _init_local_postgres(self):
+        """Initialize local PostgreSQL connection using SQLAlchemy"""
+        db_config = self.config.get('database', {}).get('local', {})
+        host = db_config.get('host', 'localhost')
+        port = db_config.get('port', 5432)
+        database = db_config.get('name', 'musician_tracking')
+        user = db_config.get('user', 'postgres')
+        password = db_config.get('password', '')
+
+        # Create connection string (handle empty password)
+        if password:
+            connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        else:
+            connection_string = f"postgresql://{user}@{host}:{port}/{database}"
+
+        # Create engine and session
+        self.engine = create_engine(connection_string, pool_size=10, max_overflow=20)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+
+        # Create tables if they don't exist
+        Base.metadata.create_all(bind=self.engine)
+
+        # Store connection type
+        self.connection_type = "local_postgres"
+        self.supabase = None
+
+        print(f"✅ VideoAlignmentDatabase connected to Local PostgreSQL: {host}:{port}/{database}")
+
+    def _init_supabase(self):
+        """Initialize Supabase connection"""
+        supabase_config = self.config.get('database', {}).get('supabase', {})
         self.supabase_url = supabase_config.get('url')
         self.supabase_key = supabase_config.get('anon_key')
 
@@ -444,9 +459,19 @@ class VideoAlignmentDatabase:
             raise ValueError(
                 "Missing Supabase credentials. Please set database.supabase.url and database.supabase.anon_key in config_v1.yaml"
             )
-        
+
         self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
+        self.connection_type = "supabase"
+        self.engine = None
+        self.SessionLocal = None
+
         print(f"✅ VideoAlignmentDatabase connected to Supabase: {self.supabase_url}")
+
+    def get_session(self) -> Optional[Session]:
+        """Get a database session (only for local PostgreSQL)"""
+        if self.use_local:
+            return self.SessionLocal()
+        return None
     
     def create_table(self) -> bool:
         """Create video_alignment_offsets table in Supabase with updated schema"""
@@ -477,30 +502,57 @@ class VideoAlignmentDatabase:
             print("💡 Please create the table manually in Supabase SQL Editor using the provided SQL.")
             return False
     
-    def insert_video_alignment(self, source: str, start_time_offset: float, 
+    def insert_video_alignment(self, source: str, start_time_offset: float,
                               matching_duration: float = 0.0, camera_type: int = None) -> bool:
         """
         Insert or update video alignment offset data
-        
+
         Args:
             source: Source video file name or identifier
             start_time_offset: Start time offset in seconds
             matching_duration: Duration of matching content in seconds (default 0.0)
             camera_type: Camera type identifier (int8)
         """
-        data = {
-            'source': source,
-            'start_time_offset': start_time_offset,
-            'matching_duration': matching_duration,
-            'camera_type': camera_type,
-            'updated_at': 'NOW()'
-        }
-        
         try:
-            # Try to upsert (insert or update if exists based on UNIQUE constraint on 'source')
-            result = self.supabase.table('video_alignment_offsets').upsert(data).execute()
-            print(f"✅ Video alignment data saved for {source}")
-            return True
+            if self.use_local:
+                session = self.get_session()
+                try:
+                    # Check if record exists
+                    existing = session.query(VideoAlignmentOffset).filter_by(source=source).first()
+
+                    if existing:
+                        # Update existing record
+                        existing.start_time_offset = start_time_offset
+                        existing.matching_duration = matching_duration
+                        existing.camera_type = camera_type
+                        existing.updated_at = datetime.now()
+                    else:
+                        # Insert new record
+                        new_record = VideoAlignmentOffset(
+                            source=source,
+                            start_time_offset=start_time_offset,
+                            matching_duration=matching_duration,
+                            camera_type=camera_type
+                        )
+                        session.add(new_record)
+
+                    session.commit()
+                    print(f"✅ Video alignment data saved for {source}")
+                    return True
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                data = {
+                    'source': source,
+                    'start_time_offset': start_time_offset,
+                    'matching_duration': matching_duration,
+                    'camera_type': camera_type,
+                    'updated_at': 'NOW()'
+                }
+                result = self.supabase.table('video_alignment_offsets').upsert(data).execute()
+                print(f"✅ Video alignment data saved for {source}")
+                return True
         except Exception as e:
             print(f"❌ Error inserting video alignment data: {e}")
             return False
@@ -508,35 +560,69 @@ class VideoAlignmentDatabase:
     def get_video_alignment(self, source: str) -> dict:
         """
         Get alignment data for a specific video source
-        
+
         Args:
             source: Source video file name or identifier
-            
+
         Returns:
             Dictionary containing alignment data or None if not found
         """
         try:
-            result = self.supabase.table('video_alignment_offsets').select('*').eq(
-                'source', source
-            ).execute()
-            
-            if result.data:
-                return result.data[0]
-            return None
+            if self.use_local:
+                session = self.get_session()
+                try:
+                    record = session.query(VideoAlignmentOffset).filter_by(source=source).first()
+                    if record:
+                        return {
+                            'id': record.id,
+                            'source': record.source,
+                            'camera_type': record.camera_type,
+                            'start_time_offset': float(record.start_time_offset),
+                            'matching_duration': float(record.matching_duration),
+                            'created_at': record.created_at.isoformat() if record.created_at else None,
+                            'updated_at': record.updated_at.isoformat() if record.updated_at else None
+                        }
+                    return None
+                finally:
+                    session.close()
+            else:
+                result = self.supabase.table('video_alignment_offsets').select('*').eq(
+                    'source', source
+                ).execute()
+
+                if result.data:
+                    return result.data[0]
+                return None
         except Exception as e:
             print(f"❌ Error retrieving video alignment data: {e}")
             return None
-    
+
     def get_all_video_alignments(self) -> list:
         """
         Get all video alignment data
-        
+
         Returns:
             List of dictionaries containing alignment data for all videos
         """
         try:
-            result = self.supabase.table('video_alignment_offsets').select('*').order('source').execute()
-            return result.data if result.data else []
+            if self.use_local:
+                session = self.get_session()
+                try:
+                    records = session.query(VideoAlignmentOffset).order_by(VideoAlignmentOffset.source).all()
+                    return [{
+                        'id': record.id,
+                        'source': record.source,
+                        'camera_type': record.camera_type,
+                        'start_time_offset': float(record.start_time_offset),
+                        'matching_duration': float(record.matching_duration),
+                        'created_at': record.created_at.isoformat() if record.created_at else None,
+                        'updated_at': record.updated_at.isoformat() if record.updated_at else None
+                    } for record in records]
+                finally:
+                    session.close()
+            else:
+                result = self.supabase.table('video_alignment_offsets').select('*').order('source').execute()
+                return result.data if result.data else []
         except Exception as e:
             print(f"❌ Error retrieving all video alignment data: {e}")
             return []
@@ -544,18 +630,39 @@ class VideoAlignmentDatabase:
     def get_alignments_by_camera_type(self, camera_type: int) -> list:
         """
         Get all video alignment data for a specific camera type
-        
+
         Args:
             camera_type: Camera type identifier
-            
+
         Returns:
             List of dictionaries containing alignment data for the specified camera type
         """
         try:
-            result = self.supabase.table('video_alignment_offsets').select('*').eq(
-                'camera_type', camera_type
-            ).order('source').execute()
-            return result.data if result.data else []
+            if self.use_local:
+                # Local PostgreSQL implementation
+                session = self.get_session()
+                try:
+                    records = session.query(VideoAlignmentOffset).filter(
+                        VideoAlignmentOffset.camera_type == camera_type
+                    ).order_by(VideoAlignmentOffset.source).all()
+
+                    return [{
+                        'id': record.id,
+                        'source': record.source,
+                        'camera_type': record.camera_type,
+                        'start_time_offset': float(record.start_time_offset),
+                        'matching_duration': float(record.matching_duration),
+                        'created_at': record.created_at.isoformat() if record.created_at else None,
+                        'updated_at': record.updated_at.isoformat() if record.updated_at else None
+                    } for record in records]
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                result = self.supabase.table('video_alignment_offsets').select('*').eq(
+                    'camera_type', camera_type
+                ).order('source').execute()
+                return result.data if result.data else []
         except Exception as e:
             print(f"❌ Error retrieving video alignment data for camera type {camera_type}: {e}")
             return []
@@ -586,33 +693,96 @@ class VideoAlignmentDatabase:
     def delete_video_alignment(self, source: str) -> bool:
         """
         Delete alignment data for a specific video source
-        
+
         Args:
             source: Source video file name or identifier
         """
         try:
-            result = self.supabase.table('video_alignment_offsets').delete().eq(
-                'source', source
-            ).execute()
-            print(f"✅ Deleted alignment data for {source}")
-            return True
+            if self.use_local:
+                # Local PostgreSQL implementation
+                session = self.get_session()
+                try:
+                    session.query(VideoAlignmentOffset).filter(
+                        VideoAlignmentOffset.source == source
+                    ).delete()
+                    session.commit()
+                    print(f"✅ Deleted alignment data for {source}")
+                    return True
+                except Exception as e:
+                    session.rollback()
+                    raise e
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                result = self.supabase.table('video_alignment_offsets').delete().eq(
+                    'source', source
+                ).execute()
+                print(f"✅ Deleted alignment data for {source}")
+                return True
         except Exception as e:
             print(f"❌ Error deleting video alignment data: {e}")
             return False
 
 
 class ChunkVideoAlignmentDatabase:
-    def __init__(self, config: Optional[dict] = None):
-        """Initialize Supabase connection for chunk video alignment operations
+    def __init__(self, use_local: Optional[bool] = None, config: Optional[dict] = None):
+        """Initialize database connection for chunk video alignment operations
 
         Args:
+            use_local: If True, use local PostgreSQL. If False, use Supabase.
+                      If None, read from config file
             config: Configuration dictionary. If None, will load from config_v1.yaml
         """
         # Load config if not provided
         if config is None:
             config = CONFIG
 
-        supabase_config = config.get('database', {}).get('supabase', {})
+        # Determine which database to use
+        if use_local is None:
+            db_type = config.get('database', {}).get('use_database_type', 'local').lower()
+            self.use_local = (db_type == 'local')
+        else:
+            self.use_local = use_local
+
+        self.config = config
+
+        if self.use_local:
+            self._init_local_postgres()
+        else:
+            self._init_supabase()
+
+    def _init_local_postgres(self):
+        """Initialize local PostgreSQL connection using SQLAlchemy"""
+        db_config = self.config.get('database', {}).get('local', {})
+        host = db_config.get('host', 'localhost')
+        port = db_config.get('port', 5432)
+        database = db_config.get('name', 'musician_tracking')
+        user = db_config.get('user', 'postgres')
+        password = db_config.get('password', '')
+
+        # Create connection string (handle empty password)
+        if password:
+            connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        else:
+            connection_string = f"postgresql://{user}@{host}:{port}/{database}"
+
+        # Create engine and session
+        self.engine = create_engine(connection_string, pool_size=10, max_overflow=20)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+
+        # Create tables if they don't exist
+        Base.metadata.create_all(bind=self.engine)
+
+        # Store connection type
+        self.connection_type = "local_postgres"
+        self.supabase = None
+
+        print(f"✅ ChunkVideoAlignmentDatabase connected to Local PostgreSQL: {host}:{port}/{database}")
+
+    def _init_supabase(self):
+        """Initialize Supabase connection"""
+        supabase_config = self.config.get('database', {}).get('supabase', {})
         self.supabase_url = supabase_config.get('url')
         self.supabase_key = supabase_config.get('anon_key')
 
@@ -622,7 +792,17 @@ class ChunkVideoAlignmentDatabase:
             )
 
         self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
+        self.connection_type = "supabase"
+        self.engine = None
+        self.SessionLocal = None
+
         print(f"✅ ChunkVideoAlignmentDatabase connected to Supabase: {self.supabase_url}")
+
+    def get_session(self) -> Optional[Session]:
+        """Get a database session (only for local PostgreSQL)"""
+        if self.use_local:
+            return self.SessionLocal()
+        return None
 
     def create_table(self) -> bool:
         """Create chunk_video_alignment_offsets table in Supabase"""
@@ -710,24 +890,47 @@ class ChunkVideoAlignmentDatabase:
             session_id: Optional session identifier
             method_type: Alignment method used ('earliest_start' or 'latest_start')
         """
-        data = {
-            'source': source,
-            'session_id': session_id,
-            'chunk_filename': chunk_filename,
-            'camera_prefix': camera_prefix,
-            'chunk_order': chunk_order,
-            'start_time_offset': start_time_offset,
-            'chunk_duration': chunk_duration,
-            'reference_camera_prefix': reference_camera_prefix,
-            'reference_chunk_filename': reference_chunk_filename,
-            'correlation_score': correlation_score,
-            'method_type': method_type,
-            'updated_at': 'NOW()'
-        }
-
         try:
-            result = self.supabase.table('chunk_video_alignment_offsets').insert(data).execute()
-            return True
+            if self.use_local:
+                session = self.get_session()
+                try:
+                    # Insert new record
+                    new_record = ChunkVideoAlignmentOffset(
+                        source=source,
+                        session_id=session_id,
+                        chunk_filename=chunk_filename,
+                        camera_prefix=camera_prefix,
+                        chunk_order=chunk_order,
+                        start_time_offset=start_time_offset,
+                        chunk_duration=chunk_duration,
+                        reference_camera_prefix=reference_camera_prefix,
+                        reference_chunk_filename=reference_chunk_filename,
+                        correlation_score=correlation_score,
+                        method_type=method_type
+                    )
+                    session.add(new_record)
+                    session.commit()
+                    return True
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                data = {
+                    'source': source,
+                    'session_id': session_id,
+                    'chunk_filename': chunk_filename,
+                    'camera_prefix': camera_prefix,
+                    'chunk_order': chunk_order,
+                    'start_time_offset': start_time_offset,
+                    'chunk_duration': chunk_duration,
+                    'reference_camera_prefix': reference_camera_prefix,
+                    'reference_chunk_filename': reference_chunk_filename,
+                    'correlation_score': correlation_score,
+                    'method_type': method_type,
+                    'updated_at': 'NOW()'
+                }
+                result = self.supabase.table('chunk_video_alignment_offsets').insert(data).execute()
+                return True
         except Exception as e:
             print(f"❌ Error inserting chunk alignment data for {chunk_filename}: {e}")
             return False
@@ -744,13 +947,43 @@ class ChunkVideoAlignmentDatabase:
             List of dictionaries containing chunk alignment data
         """
         try:
-            result = self.supabase.table('chunk_video_alignment_offsets').select('*').eq(
-                'source', source
-            ).eq(
-                'method_type', method_type
-            ).order('start_time_offset').execute()
+            if self.use_local:
+                # Local PostgreSQL implementation
+                session = self.get_session()
+                try:
+                    records = session.query(ChunkVideoAlignmentOffset).filter(
+                        ChunkVideoAlignmentOffset.source == source,
+                        ChunkVideoAlignmentOffset.method_type == method_type
+                    ).order_by(ChunkVideoAlignmentOffset.start_time_offset).all()
 
-            return result.data if result.data else []
+                    # Convert to dict format
+                    return [{
+                        'id': r.id,
+                        'source': r.source,
+                        'session_id': r.session_id,
+                        'chunk_filename': r.chunk_filename,
+                        'camera_prefix': r.camera_prefix,
+                        'chunk_order': r.chunk_order,
+                        'start_time_offset': r.start_time_offset,
+                        'chunk_duration': r.chunk_duration,
+                        'reference_camera_prefix': r.reference_camera_prefix,
+                        'reference_chunk_filename': r.reference_chunk_filename,
+                        'correlation_score': r.correlation_score,
+                        'method_type': r.method_type,
+                        'created_at': r.created_at,
+                        'updated_at': r.updated_at
+                    } for r in records]
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                result = self.supabase.table('chunk_video_alignment_offsets').select('*').eq(
+                    'source', source
+                ).eq(
+                    'method_type', method_type
+                ).order('start_time_offset').execute()
+
+                return result.data if result.data else []
         except Exception as e:
             print(f"❌ Error retrieving chunk alignment data for source {source} with method {method_type}: {e}")
             return []
@@ -766,23 +999,62 @@ class ChunkVideoAlignmentDatabase:
             List of dictionaries containing chunk alignment data from the latest session
         """
         try:
-            # First, get the latest session_id for this source
-            latest_session_result = self.supabase.table('chunk_video_alignment_offsets').select('session_id, created_at').eq(
-                'source', source
-            ).order('created_at', desc=True).limit(1).execute()
+            if self.use_local:
+                session = self.get_session()
+                try:
+                    # First, get the latest session_id for this source
+                    latest_record = session.query(ChunkVideoAlignmentOffset).filter_by(
+                        source=source
+                    ).order_by(ChunkVideoAlignmentOffset.created_at.desc()).first()
 
-            if not latest_session_result.data:
-                return []
+                    if not latest_record:
+                        return []
 
-            latest_session_id = latest_session_result.data[0]['session_id']
-            print(f"🔍 Found latest session for source '{source}': {latest_session_id}")
+                    latest_session_id = latest_record.session_id
+                    print(f"🔍 Found latest session for source '{source}': {latest_session_id}")
 
-            # Get all records for this source and latest session
-            result = self.supabase.table('chunk_video_alignment_offsets').select('*').eq(
-                'source', source
-            ).eq('session_id', latest_session_id).order('start_time_offset').execute()
+                    # Get all records for this source and latest session
+                    records = session.query(ChunkVideoAlignmentOffset).filter_by(
+                        source=source,
+                        session_id=latest_session_id
+                    ).order_by(ChunkVideoAlignmentOffset.start_time_offset).all()
 
-            return result.data if result.data else []
+                    return [{
+                        'id': record.id,
+                        'source': record.source,
+                        'session_id': record.session_id,
+                        'chunk_filename': record.chunk_filename,
+                        'camera_prefix': record.camera_prefix,
+                        'chunk_order': record.chunk_order,
+                        'start_time_offset': float(record.start_time_offset),
+                        'chunk_duration': float(record.chunk_duration),
+                        'reference_camera_prefix': record.reference_camera_prefix,
+                        'reference_chunk_filename': record.reference_chunk_filename,
+                        'correlation_score': float(record.correlation_score) if record.correlation_score else None,
+                        'method_type': record.method_type,
+                        'created_at': record.created_at.isoformat() if record.created_at else None,
+                        'updated_at': record.updated_at.isoformat() if record.updated_at else None
+                    } for record in records]
+                finally:
+                    session.close()
+            else:
+                # First, get the latest session_id for this source
+                latest_session_result = self.supabase.table('chunk_video_alignment_offsets').select('session_id, created_at').eq(
+                    'source', source
+                ).order('created_at', desc=True).limit(1).execute()
+
+                if not latest_session_result.data:
+                    return []
+
+                latest_session_id = latest_session_result.data[0]['session_id']
+                print(f"🔍 Found latest session for source '{source}': {latest_session_id}")
+
+                # Get all records for this source and latest session
+                result = self.supabase.table('chunk_video_alignment_offsets').select('*').eq(
+                    'source', source
+                ).eq('session_id', latest_session_id).order('start_time_offset').execute()
+
+                return result.data if result.data else []
         except Exception as e:
             print(f"❌ Error retrieving chunk alignment data for source {source}: {e}")
             return []
@@ -799,12 +1071,42 @@ class ChunkVideoAlignmentDatabase:
             List of dictionaries containing chunk alignment data for the camera group
         """
         try:
-            result = self.supabase.table('chunk_video_alignment_offsets').select('*').eq(
-                'source', source
-            ).eq(
-                'camera_prefix', camera_prefix
-            ).order('chunk_order').execute()
-            return result.data if result.data else []
+            if self.use_local:
+                # Local PostgreSQL implementation
+                session = self.get_session()
+                try:
+                    records = session.query(ChunkVideoAlignmentOffset).filter(
+                        ChunkVideoAlignmentOffset.source == source,
+                        ChunkVideoAlignmentOffset.camera_prefix == camera_prefix
+                    ).order_by(ChunkVideoAlignmentOffset.chunk_order).all()
+
+                    # Convert to dict format
+                    return [{
+                        'id': r.id,
+                        'source': r.source,
+                        'session_id': r.session_id,
+                        'chunk_filename': r.chunk_filename,
+                        'camera_prefix': r.camera_prefix,
+                        'chunk_order': r.chunk_order,
+                        'start_time_offset': r.start_time_offset,
+                        'chunk_duration': r.chunk_duration,
+                        'reference_camera_prefix': r.reference_camera_prefix,
+                        'reference_chunk_filename': r.reference_chunk_filename,
+                        'correlation_score': r.correlation_score,
+                        'method_type': r.method_type,
+                        'created_at': r.created_at,
+                        'updated_at': r.updated_at
+                    } for r in records]
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                result = self.supabase.table('chunk_video_alignment_offsets').select('*').eq(
+                    'source', source
+                ).eq(
+                    'camera_prefix', camera_prefix
+                ).order('chunk_order').execute()
+                return result.data if result.data else []
         except Exception as e:
             print(f"❌ Error retrieving chunk alignment data for {source}/{camera_prefix}: {e}")
             return []
@@ -817,11 +1119,28 @@ class ChunkVideoAlignmentDatabase:
             source: Source identifier (e.g., 'vid_shot1')
         """
         try:
-            result = self.supabase.table('chunk_video_alignment_offsets').delete().eq(
-                'source', source
-            ).execute()
-            print(f"✅ Deleted chunk alignment data for source {source}")
-            return True
+            if self.use_local:
+                # Local PostgreSQL implementation
+                session = self.get_session()
+                try:
+                    session.query(ChunkVideoAlignmentOffset).filter(
+                        ChunkVideoAlignmentOffset.source == source
+                    ).delete()
+                    session.commit()
+                    print(f"✅ Deleted chunk alignment data for source {source}")
+                    return True
+                except Exception as e:
+                    session.rollback()
+                    raise e
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                result = self.supabase.table('chunk_video_alignment_offsets').delete().eq(
+                    'source', source
+                ).execute()
+                print(f"✅ Deleted chunk alignment data for source {source}")
+                return True
         except Exception as e:
             print(f"❌ Error deleting chunk alignment data for source {source}: {e}")
             return False
@@ -834,18 +1153,35 @@ class ChunkVideoAlignmentDatabase:
             List of unique source identifiers
         """
         try:
-            # Get distinct sources from the table
-            result = self.supabase.table('chunk_video_alignment_offsets').select('source').execute()
+            if self.use_local:
+                # Local PostgreSQL implementation
+                session = self.get_session()
+                try:
+                    # Get distinct sources using SQLAlchemy
+                    records = session.query(ChunkVideoAlignmentOffset.source).distinct().all()
 
-            if not result.data:
-                return []
+                    # Extract unique sources
+                    sources = [r.source for r in records if r.source]
+                    sources.sort()  # Sort alphabetically
 
-            # Extract unique sources
-            sources = list(set([item['source'] for item in result.data if item.get('source')]))
-            sources.sort()  # Sort alphabetically
+                    print(f"✅ Found {len(sources)} unique sources")
+                    return sources
+                finally:
+                    session.close()
+            else:
+                # Supabase implementation
+                # Get distinct sources from the table
+                result = self.supabase.table('chunk_video_alignment_offsets').select('source').execute()
 
-            print(f"✅ Found {len(sources)} unique sources")
-            return sources
+                if not result.data:
+                    return []
+
+                # Extract unique sources
+                sources = list(set([item['source'] for item in result.data if item.get('source')]))
+                sources.sort()  # Sort alphabetically
+
+                print(f"✅ Found {len(sources)} unique sources")
+                return sources
         except Exception as e:
             print(f"❌ Error retrieving sources: {e}")
             return []
@@ -932,12 +1268,10 @@ def test_connection():
             video_file="test_video.mp4",
             left_hand_landmarks=[{"x": 0.5, "y": 0.3, "z": 0.1, "confidence": 0.9}],
             pose_landmarks=[{"x": 0.4, "y": 0.2, "z": 0.05, "confidence": 0.95}],
-            emotions={"happy": 0.8, "neutral": 0.2},
             bad_gestures={"low_wrists": True},
             processing_time_ms=50,
             hand_model="mediapipe",
-            pose_model="yolo",
-            emotion_model="deepface"
+            pose_model="yolo"
         )
         
         if success:

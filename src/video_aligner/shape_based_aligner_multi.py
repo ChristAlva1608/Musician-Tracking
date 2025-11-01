@@ -236,58 +236,373 @@ def extract_prefix_and_chunk_number(filename: str) -> Tuple[str, int]:
 
 def scan_and_group_chunk_videos(video_dir: str) -> Dict[str, CameraGroup]:
     """
-    Scan directory and group videos by camera prefix
-
+    Scan directory with camera subdirectories and group videos by camera prefix
+    
+    Expected structure:
+        video_dir/
+            Cam1_X4/
+                P01_Cam1_chunk007.mp4
+                P01_Cam1_chunk008.mp4
+            Cam2_X4/
+                P01_Cam2_chunk004.mp4
+                P01_Cam2_chunk005.mp4
+    
     Args:
-        video_dir: Directory containing video files
-
+        video_dir: Directory containing camera subdirectories
+    
     Returns:
         Dictionary mapping camera prefix to CameraGroup
     """
-    video_files = glob.glob(os.path.join(video_dir, "*.mp4"))
     camera_groups = defaultdict(list)
-
-    print(f"\nScanning {len(video_files)} video files for chunk grouping...")
-
-    for video_path in video_files:
-        filename = os.path.basename(video_path)
-        prefix, chunk_number = extract_prefix_and_chunk_number(filename)
-
-        # Get video duration
-        duration = get_video_duration(video_path)
-        if duration is None:
-            print(f"Warning: Could not get duration for {filename}, skipping")
+    
+    print(f"\nScanning camera subdirectories in {video_dir}...")
+    
+    # Find all subdirectories (camera folders)
+    if not os.path.exists(video_dir):
+        print(f"❌ Directory not found: {video_dir}")
+        return {}
+    
+    subdirs = [d for d in os.listdir(video_dir) 
+               if os.path.isdir(os.path.join(video_dir, d))]
+    
+    if not subdirs:
+        print(f"❌ No subdirectories found in {video_dir}")
+        return {}
+    
+    print(f"Found {len(subdirs)} camera directories: {subdirs}")
+    
+    total_videos = 0
+    for subdir in subdirs:
+        camera_path = os.path.join(video_dir, subdir)
+        video_files = glob.glob(os.path.join(camera_path, "*.mp4"))
+        
+        if not video_files:
+            print(f"  ⚠️  No MP4 files in {subdir}, skipping")
             continue
-
-        chunk = ChunkVideo(
-            filename=filename,
-            filepath=video_path,
-            prefix=prefix,
-            chunk_number=chunk_number,
-            duration=duration
-        )
-
-        camera_groups[prefix].append(chunk)
-        print(f"  {filename} -> prefix: {prefix}, chunk: {chunk_number}, duration: {duration:.1f}s")
-
+        
+        print(f"\n📁 Processing camera directory: {subdir}")
+        print(f"   Found {len(video_files)} video files")
+        
+        # Extract camera prefix from directory name (e.g., "Cam1_X4" -> "Cam1")
+        # or from first video filename
+        camera_prefix = extract_camera_prefix_from_directory(subdir, video_files)
+        
+        for video_path in video_files:
+            filename = os.path.basename(video_path)
+            
+            # Extract chunk number from filename
+            # Pattern: P01_Cam1_chunk007.mp4 -> chunk_number = 7
+            chunk_number = extract_chunk_number_from_filename(filename)
+            
+            if chunk_number is None:
+                print(f"  ⚠️  Could not extract chunk number from {filename}, skipping")
+                continue
+            
+            # Get video duration
+            duration = get_video_duration(video_path)
+            if duration is None:
+                print(f"  ⚠️  Could not get duration for {filename}, skipping")
+                continue
+            
+            chunk = ChunkVideo(
+                filename=filename,
+                filepath=video_path,
+                prefix=camera_prefix,
+                chunk_number=chunk_number,
+                duration=duration
+            )
+            
+            camera_groups[camera_prefix].append(chunk)
+            total_videos += 1
+            print(f"  ✅ {filename} -> camera: {camera_prefix}, chunk: {chunk_number}, duration: {duration:.1f}s")
+    
+    if total_videos == 0:
+        print("❌ No valid video files found in any subdirectory")
+        return {}
+    
     # Sort chunks within each camera group by chunk number
     result = {}
     for prefix, chunks in camera_groups.items():
         sorted_chunks = sorted(chunks, key=lambda x: x.chunk_number)
         total_duration = sum(chunk.duration for chunk in sorted_chunks)
-
+        
         result[prefix] = CameraGroup(
             prefix=prefix,
             chunks=sorted_chunks,
             total_duration=total_duration,
             earliest_start=0.0  # Will be calculated later
         )
-
-        print(f"\nCamera group '{prefix}': {len(sorted_chunks)} chunks, total: {total_duration:.1f}s")
+        
+        print(f"\n📹 Camera group '{prefix}': {len(sorted_chunks)} chunks, total: {total_duration:.1f}s")
+        chunk_numbers = [chunk.chunk_number for chunk in sorted_chunks]
+        print(f"   Chunk sequence: {chunk_numbers}")
+        
         for chunk in sorted_chunks:
-            print(f"  - {chunk.filename} (chunk {chunk.chunk_number}): {chunk.duration:.1f}s")
-
+            print(f"   - chunk{chunk.chunk_number:03d}: {chunk.duration:.1f}s ({chunk.filename})")
+    
     return result
+
+
+def extract_camera_prefix_from_directory(dirname: str, video_files: List[str]) -> str:
+    """
+    Extract camera prefix from directory name or video filenames
+    
+    Examples:
+        "Cam1_X4" -> "Cam1"
+        "Cam2_X5" -> "Cam2"
+        "Cam4_iPhone" -> "Cam4"
+    
+    Args:
+        dirname: Directory name (e.g., "Cam1_X4")
+        video_files: List of video file paths in the directory
+    
+    Returns:
+        Camera prefix (e.g., "Cam1")
+    """
+    # Try to extract from directory name first
+    # Pattern: Cam1_X4, Cam2_X5, etc.
+    parts = dirname.split('_')
+    
+    # Look for part starting with "Cam"
+    for part in parts:
+        if part.lower().startswith('cam'):
+            return part
+    
+    # Fallback: extract from first video filename
+    if video_files:
+        first_video = os.path.basename(video_files[0])
+        # Pattern: P01_Cam1_chunk007.mp4
+        match = re.search(r'(Cam\d+)', first_video, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    # Last resort: use directory name as-is
+    return dirname
+
+
+def extract_chunk_number_from_filename(filename: str) -> Optional[int]:
+    """
+    Extract chunk number from filename
+    
+    Examples:
+        "P01_Cam1_chunk007.mp4" -> 7
+        "P01_Cam2_chunk004.mp4" -> 4
+        "P01_Cam4_IMG3571.mp4" -> None (not a chunk file)
+    
+    Args:
+        filename: Video filename
+    
+    Returns:
+        Chunk number as integer, or None if not found
+    """
+    # Pattern: chunk followed by digits
+    match = re.search(r'chunk(\d+)', filename, re.IGNORECASE)
+    
+    if match:
+        return int(match.group(1))
+    
+    return None
+
+
+def combine_chunk_videos_with_freeze_frames(camera_groups: Dict[str, CameraGroup]) -> Dict[str, str]:
+    """
+    Combine chunk videos with freeze frames for gaps
+    
+    For gaps between chunks:
+    - Extract last frame of previous chunk
+    - Create video segment from that frame for gap duration
+    - Concatenate: chunk1 + freeze_frame + chunk2
+    
+    Args:
+        camera_groups: Dictionary of camera groups with timeline-positioned chunks
+    
+    Returns:
+        Dictionary mapping camera prefix to output video path
+    """
+    print(f"\n{'='*80}")
+    print("COMBINING CHUNK VIDEOS WITH FREEZE FRAMES FOR GAPS")
+    print(f"{'='*80}")
+    
+    result = {}
+    
+    for prefix, group in camera_groups.items():
+        if len(group.chunks) == 1:
+            # Single chunk, copy to output location
+            chunk = group.chunks[0]
+            print(f"\n📹 Camera '{prefix}': Single chunk, copying {chunk.filename}")
+            
+            output_dir = os.path.dirname(group.output_video_path)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            try:
+                shutil.copy2(chunk.filepath, group.output_video_path)
+                print(f"  ✅ Copied to {group.output_video_path}")
+                result[prefix] = group.output_video_path
+            except Exception as e:
+                print(f"  ❌ Failed to copy: {e}")
+                result[prefix] = chunk.filepath
+            continue
+        
+        print(f"\n📹 Camera '{prefix}': Combining {len(group.chunks)} chunks with freeze frames")
+        
+        # Create output directory
+        output_dir = os.path.dirname(group.output_video_path)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Sort chunks by timeline position
+        sorted_chunks = sorted(group.chunks, key=lambda x: x.start_time_offset)
+        
+        # Temporary directory for freeze frame segments
+        temp_dir = os.path.join(output_dir, f'temp_{prefix}')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        try:
+            # Build list of video segments (chunks + freeze frames)
+            segment_files = []
+            
+            for i, chunk in enumerate(sorted_chunks):
+                # Add the chunk itself
+                segment_files.append(chunk.filepath)
+                print(f"  [{i+1}] Adding chunk: {chunk.filename} ({chunk.duration:.1f}s)")
+                
+                # Check if there's a gap before next chunk
+                if i < len(sorted_chunks) - 1:
+                    next_chunk = sorted_chunks[i + 1]
+                    
+                    # Calculate gap
+                    current_end = chunk.start_time_offset + chunk.duration
+                    next_start = next_chunk.start_time_offset
+                    gap_duration = next_start - current_end
+                    
+                    if gap_duration > 1.0:  # Significant gap (> 1 second)
+                        print(f"  [GAP] Detected {gap_duration:.1f}s gap before {next_chunk.filename}")
+                        
+                        # Create freeze frame video from last frame of current chunk
+                        freeze_frame_path = os.path.join(
+                            temp_dir, 
+                            f'freeze_{chunk.chunk_number}_to_{next_chunk.chunk_number}.mp4'
+                        )
+                        
+                        success = create_freeze_frame_video(
+                            chunk.filepath,
+                            freeze_frame_path,
+                            gap_duration
+                        )
+                        
+                        if success:
+                            segment_files.append(freeze_frame_path)
+                            print(f"      ✅ Created freeze frame: {gap_duration:.1f}s")
+                        else:
+                            print(f"      ⚠️  Failed to create freeze frame, gap will be lost")
+            
+            # Create concat file
+            concat_file_path = os.path.join(temp_dir, f'{prefix}_concat.txt')
+            with open(concat_file_path, 'w') as f:
+                for segment_file in segment_files:
+                    # Use absolute paths to avoid issues
+                    abs_path = os.path.abspath(segment_file)
+                    f.write(f"file '{abs_path}'\n")
+            
+            print(f"\n  Concatenating {len(segment_files)} segments...")
+            
+            # Concatenate all segments
+            cmd = [
+                'ffmpeg', '-y',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', concat_file_path,
+                '-c', 'copy',  # Copy codec for speed
+                group.output_video_path
+            ]
+            
+            result_proc = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result_proc.returncode == 0:
+                print(f"  ✅ Combined video saved to {group.output_video_path}")
+                result[prefix] = group.output_video_path
+            else:
+                print(f"  ❌ FFmpeg failed: {result_proc.stderr[:500]}")
+                result[prefix] = sorted_chunks[0].filepath
+        
+        except Exception as e:
+            print(f"  ❌ Error during concatenation: {e}")
+            result[prefix] = sorted_chunks[0].filepath
+        
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                    print(f"  🧹 Cleaned up temporary files")
+                except Exception as e:
+                    print(f"  ⚠️  Could not clean up temp directory: {e}")
+    
+    return result
+
+
+def create_freeze_frame_video(source_video_path: str, 
+                              output_path: str, 
+                              duration: float) -> bool:
+    """
+    Create a video segment by freezing the last frame of source video
+    
+    Args:
+        source_video_path: Path to source video
+        output_path: Path to save freeze frame video
+        duration: Duration of freeze frame in seconds
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Step 1: Extract last frame as image
+        temp_frame_path = output_path.replace('.mp4', '_frame.png')
+        
+        cmd_extract = [
+            'ffmpeg', '-y',
+            '-sseof', '-1',  # Seek to 1 second before end
+            '-i', source_video_path,
+            '-update', '1',
+            '-frames:v', '1',
+            temp_frame_path
+        ]
+        
+        result = subprocess.run(cmd_extract, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"      ❌ Failed to extract last frame: {result.stderr[:200]}")
+            return False
+        
+        # Step 2: Create video from frame with same properties as source
+        cmd_create = [
+            'ffmpeg', '-y',
+            '-loop', '1',
+            '-i', temp_frame_path,
+            '-i', source_video_path,  # Use as reference for properties
+            '-t', str(duration),
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-r', '30',  # Frame rate
+            '-map', '0:v',  # Video from frame
+            '-map', '1:a?',  # Audio from source (if exists)
+            '-shortest',  # End when shortest stream ends
+            output_path
+        ]
+        
+        result = subprocess.run(cmd_create, capture_output=True, text=True)
+        
+        # Clean up temporary frame
+        if os.path.exists(temp_frame_path):
+            os.remove(temp_frame_path)
+        
+        if result.returncode != 0:
+            print(f"      ❌ Failed to create freeze video: {result.stderr[:200]}")
+            return False
+        
+        return True
+    
+    except Exception as e:
+        print(f"      ❌ Exception creating freeze frame: {e}")
+        return False
 
 def calculate_intra_camera_gaps(camera_groups: Dict[str, CameraGroup]) -> Dict[str, CameraGroup]:
     """
