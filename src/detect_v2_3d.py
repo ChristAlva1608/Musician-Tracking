@@ -335,11 +335,22 @@ class DetectorV2:
         y_coords = []
 
         for landmark in hand_landmarks.landmark:
-            x_coords.append(landmark.x * width)
-            y_coords.append(landmark.y * height)
+            # Handle different landmark structures safely
+            if hasattr(landmark, 'x') and hasattr(landmark, 'y'):
+                x_coords.append(landmark.x * width)
+                y_coords.append(landmark.y * height)
+            elif isinstance(landmark, dict):
+                x_coords.append(landmark.get('x', 0) * width)
+                y_coords.append(landmark.get('y', 0) * height)
+            elif isinstance(landmark, (list, tuple)) and len(landmark) >= 2:
+                x_coords.append(landmark[0] * width)
+                y_coords.append(landmark[1] * height)
 
         # Find actual boundaries from all 21 landmarks
         # This ensures the box covers the entire hand regardless of orientation
+        if not x_coords or not y_coords:
+            return None
+
         x_min = min(x_coords)
         x_max = max(x_coords)
         y_min = min(y_coords)
@@ -381,11 +392,25 @@ class DetectorV2:
 
         landmarks_list = []
         for landmark in hand_landmarks.landmark:
-            landmarks_list.append({
-                'x': landmark.x,
-                'y': landmark.y,
-                'z': landmark.z if hasattr(landmark, 'z') else 0
-            })
+            # Handle different landmark structures safely
+            if hasattr(landmark, 'x') and hasattr(landmark, 'y'):
+                landmarks_list.append({
+                    'x': landmark.x,
+                    'y': landmark.y,
+                    'z': landmark.z if hasattr(landmark, 'z') else 0
+                })
+            elif isinstance(landmark, dict):
+                landmarks_list.append({
+                    'x': landmark.get('x', 0),
+                    'y': landmark.get('y', 0),
+                    'z': landmark.get('z', 0)
+                })
+            elif isinstance(landmark, (list, tuple)) and len(landmark) >= 2:
+                landmarks_list.append({
+                    'x': landmark[0],
+                    'y': landmark[1],
+                    'z': landmark[2] if len(landmark) >= 3 else 0
+                })
         return landmarks_list
 
     def get_available_models(self) -> Dict[str, bool]:
@@ -439,8 +464,20 @@ class DetectorV2:
                     for handedness_list in hand_results.handedness:
                         # MediaPipe Tasks API: handedness is List[List[Category]]
                         # category_name is 'Left' or 'Right'
-                        label = handedness_list[0].category_name
-                        hand_handedness_list.append(label)
+                        if handedness_list and len(handedness_list) > 0:
+                            first_hand = handedness_list[0]
+                            # Handle different handedness data structures
+                            if hasattr(first_hand, 'category_name'):
+                                label = first_hand.category_name
+                            elif isinstance(first_hand, dict):
+                                label = first_hand.get('category_name', first_hand.get('label', 'Unknown'))
+                            elif isinstance(first_hand, str):
+                                label = first_hand
+                            else:
+                                label = 'Unknown'
+                            hand_handedness_list.append(label)
+                        else:
+                            hand_handedness_list.append('Unknown')
 
                 # Process each detected hand - convert to dict format for database
                 for hand_idx, world_hand_landmarks in enumerate(hand_results.hand_world_landmarks):
@@ -450,11 +487,25 @@ class DetectorV2:
                     # Convert world landmarks to dictionary format (for database storage)
                     world_landmarks_dict = []
                     for landmark in world_hand_landmarks:
-                        world_landmarks_dict.append({
-                            'x': float(landmark.x),  # World coordinate in meters
-                            'y': float(landmark.y),  # World coordinate in meters
-                            'z': float(landmark.z)   # World coordinate in meters
-                        })
+                        # Handle different landmark data structures
+                        if hasattr(landmark, 'x') and hasattr(landmark, 'y') and hasattr(landmark, 'z'):
+                            world_landmarks_dict.append({
+                                'x': float(landmark.x),  # World coordinate in meters
+                                'y': float(landmark.y),  # World coordinate in meters
+                                'z': float(landmark.z)   # World coordinate in meters
+                            })
+                        elif isinstance(landmark, dict):
+                            world_landmarks_dict.append({
+                                'x': float(landmark.get('x', 0)),
+                                'y': float(landmark.get('y', 0)),
+                                'z': float(landmark.get('z', 0))
+                            })
+                        elif isinstance(landmark, (list, tuple)) and len(landmark) >= 3:
+                            world_landmarks_dict.append({
+                                'x': float(landmark[0]),
+                                'y': float(landmark[1]),
+                                'z': float(landmark[2])
+                            })
 
                     # Assign to left or right hand based on handedness
                     if world_landmarks_dict and handedness:
@@ -565,20 +616,31 @@ class DetectorV2:
                                 # IMPORTANT: Keep z-coordinate for 3D world data!
                                 adjusted_landmarks = []
                                 for landmark in crop_landmarks:
-                                    # Scale x, y back to original frame coordinates
-                                    orig_x = landmark['x'] * w_pad + x_pad
-                                    orig_y = landmark['y'] * h_pad + y_pad
-
-                                    # Preserve z-coordinate (depth relative to face)
-                                    # MediaPipe provides z in normalized units relative to face width
-                                    # We can optionally scale it to approximate real-world units
-                                    orig_z = landmark.get('z', 0.0) * w_pad  # Scale z by face width
+                                    # Handle different landmark data structures
+                                    if isinstance(landmark, dict):
+                                        # Scale x, y back to original frame coordinates
+                                        orig_x = landmark.get('x', 0) * w_pad + x_pad
+                                        orig_y = landmark.get('y', 0) * h_pad + y_pad
+                                        orig_z = landmark.get('z', 0.0) * w_pad  # Scale z by face width
+                                        confidence = landmark.get('confidence', 1.0)
+                                    elif hasattr(landmark, 'x') and hasattr(landmark, 'y'):
+                                        orig_x = landmark.x * w_pad + x_pad
+                                        orig_y = landmark.y * h_pad + y_pad
+                                        orig_z = getattr(landmark, 'z', 0.0) * w_pad
+                                        confidence = getattr(landmark, 'confidence', 1.0)
+                                    elif isinstance(landmark, (list, tuple)) and len(landmark) >= 2:
+                                        orig_x = landmark[0] * w_pad + x_pad
+                                        orig_y = landmark[1] * h_pad + y_pad
+                                        orig_z = landmark[2] * w_pad if len(landmark) >= 3 else 0.0
+                                        confidence = landmark[3] if len(landmark) >= 4 else 1.0
+                                    else:
+                                        continue  # Skip invalid landmark
 
                                     adjusted_landmarks.append({
                                         'x': orig_x,
                                         'y': orig_y,
                                         'z': orig_z,  # ✅ Now preserving z-coordinate!
-                                        'confidence': landmark.get('confidence', 1.0)
+                                        'confidence': confidence
                                     })
                                 # ✅ FIXED: Append as separate face, not extend
                                 face_landmarks_per_face.append(adjusted_landmarks)

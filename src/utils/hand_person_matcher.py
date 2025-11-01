@@ -252,9 +252,21 @@ def match_hands_to_people_from_results(
                 confidence = 1.0
                 if handedness and len(handedness) > 0:
                     # handedness is already a list: [Category]
-                    # Category has .category_name and .score attributes
-                    handedness_label = handedness[0].category_name
-                    confidence = handedness[0].score
+                    # Handle different handedness data structures
+                    first_hand = handedness[0]
+
+                    # If it's an object with attributes
+                    if hasattr(first_hand, 'category_name') and hasattr(first_hand, 'score'):
+                        handedness_label = first_hand.category_name
+                        confidence = first_hand.score
+                    # If it's a dictionary
+                    elif isinstance(first_hand, dict):
+                        handedness_label = first_hand.get('category_name', first_hand.get('label', 'Unknown'))
+                        confidence = first_hand.get('score', first_hand.get('confidence', 1.0))
+                    # If it's a string (direct label)
+                    elif isinstance(first_hand, str):
+                        handedness_label = first_hand
+                        confidence = 1.0
 
                 detected_hands.append({
                     'landmarks': landmarks_dict,

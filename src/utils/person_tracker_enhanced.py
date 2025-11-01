@@ -220,8 +220,17 @@ class PersonTrackerWithHistory:
         y_coords = []
         for idx in torso_indices:
             if idx < len(pose_landmarks):
-                x_coords.append(pose_landmarks[idx].get('x', 0))
-                y_coords.append(pose_landmarks[idx].get('y', 0))
+                landmark = pose_landmarks[idx]
+                # Handle different landmark data structures
+                if isinstance(landmark, dict):
+                    x_coords.append(landmark.get('x', 0))
+                    y_coords.append(landmark.get('y', 0))
+                elif hasattr(landmark, 'x') and hasattr(landmark, 'y'):
+                    x_coords.append(landmark.x)
+                    y_coords.append(landmark.y)
+                elif isinstance(landmark, (list, tuple)) and len(landmark) >= 2:
+                    x_coords.append(landmark[0])
+                    y_coords.append(landmark[1])
 
         if not x_coords:
             return (0.0, 0.0)
@@ -233,8 +242,22 @@ class PersonTrackerWithHistory:
         if not pose_landmarks:
             return (0.0, 0.0, 0.0, 0.0)
 
-        x_coords = [lm.get('x', 0) for lm in pose_landmarks]
-        y_coords = [lm.get('y', 0) for lm in pose_landmarks]
+        x_coords = []
+        y_coords = []
+        for lm in pose_landmarks:
+            # Handle different landmark data structures
+            if isinstance(lm, dict):
+                x_coords.append(lm.get('x', 0))
+                y_coords.append(lm.get('y', 0))
+            elif hasattr(lm, 'x') and hasattr(lm, 'y'):
+                x_coords.append(lm.x)
+                y_coords.append(lm.y)
+            elif isinstance(lm, (list, tuple)) and len(lm) >= 2:
+                x_coords.append(lm[0])
+                y_coords.append(lm[1])
+
+        if not x_coords or not y_coords:
+            return (0.0, 0.0, 0.0, 0.0)
 
         x_min, x_max = min(x_coords), max(x_coords)
         y_min, y_max = min(y_coords), max(y_coords)

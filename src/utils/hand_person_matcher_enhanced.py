@@ -205,6 +205,9 @@ class HandPersonMatcherEnhanced:
         # ============================================================
         for face_idx in list(unmatched_face_indices):
             bbox = face_bboxes[face_idx]
+            # Ensure bbox is a dictionary before accessing
+            if not isinstance(bbox, dict):
+                continue
             face_center = {
                 'x': bbox.get('x', 0) + bbox.get('w', 0) / 2,
                 'y': bbox.get('y', 0) + bbox.get('h', 0) / 2
@@ -238,6 +241,9 @@ class HandPersonMatcherEnhanced:
 
             for face_idx in list(unmatched_face_indices):
                 bbox = face_bboxes[face_idx]
+                # Ensure bbox is a dictionary before accessing
+                if not isinstance(bbox, dict):
+                    continue
                 face_center = {
                     'x': bbox.get('x', 0) + bbox.get('w', 0) / 2,
                     'y': bbox.get('y', 0) + bbox.get('h', 0) / 2
@@ -476,8 +482,21 @@ def convert_hand_results_to_detected_hands(
                 confidence = 1.0
                 if handedness and len(handedness) > 0:
                     # handedness is already a list: [Category]
-                    handedness_label = handedness[0].category_name
-                    confidence = handedness[0].score
+                    # Handle different handedness data structures
+                    first_hand = handedness[0]
+
+                    # If it's an object with attributes
+                    if hasattr(first_hand, 'category_name') and hasattr(first_hand, 'score'):
+                        handedness_label = first_hand.category_name
+                        confidence = first_hand.score
+                    # If it's a dictionary
+                    elif isinstance(first_hand, dict):
+                        handedness_label = first_hand.get('category_name', first_hand.get('label', 'Unknown'))
+                        confidence = first_hand.get('score', first_hand.get('confidence', 1.0))
+                    # If it's a string (direct label)
+                    elif isinstance(first_hand, str):
+                        handedness_label = first_hand
+                        confidence = 1.0
 
                 detected_hands.append({
                     'landmarks': landmarks_dict,
