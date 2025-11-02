@@ -293,6 +293,10 @@ class DatabaseManager:
                 return None
             if isinstance(value, list):
                 return value
+            # If it's a tuple, convert to list (tuples are valid ordered sequences)
+            if isinstance(value, tuple):
+                print(f"ℹ️ Info: {name} is tuple, converting to list.")
+                return list(value)
             # If it's a dict, it might be a single landmark - wrap it in a list
             if isinstance(value, dict):
                 print(f"⚠️ Warning: {name} is dict, expected list. Wrapping in list.")

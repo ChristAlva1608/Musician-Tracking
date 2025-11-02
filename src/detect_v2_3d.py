@@ -36,10 +36,13 @@ from src.bad_gesture.bad_gestures_3d import BadGestureDetector3D
 from src.utils.person_tracker_enhanced import PersonTrackerWithHistory
 
 # Import spatial matching utilities
+from src.utils.hand_person_matcher_enhanced import (
+    HandPersonMatcherEnhanced,
+    convert_hand_results_to_detected_hands
+)
 from src.utils.hand_person_matcher import (
-    match_hands_to_people_from_results,
-    get_person_hand_landmarks,
-    assign_faces_to_people
+    assign_faces_to_people,
+    get_person_hand_landmarks
 )
 
 # Import database
@@ -136,6 +139,13 @@ class DetectorV2:
             max_history_frames=30,  # Keep 30 frames of history (1 second at 30fps)
             max_disappeared_frames=15,  # Allow person to disappear for 15 frames before recycling ID
             distance_threshold=0.15  # Maximum centroid movement between frames (15% of frame)
+        )
+
+        # Initialize enhanced hand-person matcher with temporal fallback
+        self.hand_person_matcher = HandPersonMatcherEnhanced(
+            strict_threshold=0.3,  # Threshold for current frame matching
+            relaxed_threshold=0.5,  # Threshold for temporal buffer matching
+            temporal_lookback=30  # Number of frames to search in history
         )
 
         print(f"✅ DetectorV2 initialized")
@@ -1015,10 +1025,24 @@ class DetectorV2:
             # SPATIAL MATCHING: HANDS AND FACES TO PEOPLE
             # ============================================================
 
-            # Match detected hands to people based on wrist proximity
-            matched_hands = match_hands_to_people_from_results(
+            # Convert hand results to detected hands format
+            detected_hands = convert_hand_results_to_detected_hands(
                 hand_results,
-                pose_landmarks_multi,
+                self.hand_detector
+            )
+
+            # Get pose history for temporal matching
+            pose_history = self.person_tracker.get_historical_poses(lookback_frames=30)
+
+            # Get stable person ID mapping from tracker
+            person_id_mapping = results.get('person_id_mapping', {})
+
+            # Match detected hands to people using enhanced matcher with temporal fallback
+            # This returns a tuple: (matched_hands, unmatched_hands)
+            matched_hands, unmatched_hands = self.hand_person_matcher.match_hands_with_temporal_fallback(
+                detected_hands,
+                person_id_mapping,  # Current frame's person poses (stable_person_id -> pose_landmarks)
+                pose_history,  # Historical poses for temporal matching
                 self.hand_detector
             )
 
@@ -1103,6 +1127,42 @@ class DetectorV2:
                     facemesh_model=self.config['detection'].get('facemesh_model'),
                     transcript_segment_id=transcript_segment_id
                 )
+
+            # ============================================================
+            # SAVE UNMATCHED HANDS WITH PERSON_ID = -1
+            # ============================================================
+            if unmatched_hands:
+                for unmatched_hand in unmatched_hands:
+                    # Determine which hand (left or right) based on handedness
+                    hand_landmarks = unmatched_hand.get('landmarks')
+                    handedness = unmatched_hand.get('handedness', 'Unknown')
+
+                    left_hand = hand_landmarks if handedness == 'Left' else None
+                    right_hand = hand_landmarks if handedness == 'Right' else None
+
+                    # Save unmatched hand with person_id = -1
+                    self.db.add_frame_to_batch(
+                        session_id=self.session_id,
+                        frame_number=results['frame_number'],
+                        person_id=-1,  # Unmatched detection marker
+                        video_file=video_file,
+                        original_time=float(f"{original_time:.3f}"),
+                        synced_time=float(f"{synced_time:.3f}"),
+                        left_hand_landmarks=left_hand,
+                        right_hand_landmarks=right_hand,
+                        pose_landmarks=None,  # No pose for unmatched hands
+                        facemesh_landmarks=None,  # No face for unmatched hands
+                        bad_gestures={},  # No bad gestures for unmatched
+                        processing_time_ms=results['processing_times']['total'],
+                        hand_processing_time_ms=results['processing_times']['hand'],
+                        pose_processing_time_ms=results['processing_times']['pose'],
+                        facemesh_processing_time_ms=results['processing_times']['face'],
+                        bad_gesture_processing_time_ms=results['processing_times']['bad_gestures'],
+                        hand_model=self.config['detection'].get('hand_model'),
+                        pose_model=self.config['detection'].get('pose_model'),
+                        facemesh_model=self.config['detection'].get('facemesh_model'),
+                        transcript_segment_id=transcript_segment_id
+                    )
         except Exception as e:
             import traceback
             print(f"❌ Error saving to database: {e}")
