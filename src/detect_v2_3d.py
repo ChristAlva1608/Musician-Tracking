@@ -1037,11 +1037,19 @@ class DetectorV2:
             # Get stable person ID mapping from tracker
             person_id_mapping = results.get('person_id_mapping', {})
 
+            # Reconstruct the tracked poses dictionary for the matcher
+            # The matcher expects {stable_person_id: pose_landmarks}
+            pose_landmarks_multi = results.get('pose_landmarks_3d_dict', [])
+            current_person_poses = {}
+            for idx, person_id in person_id_mapping.items():
+                if idx < len(pose_landmarks_multi):
+                    current_person_poses[person_id] = pose_landmarks_multi[idx]
+
             # Match detected hands to people using enhanced matcher with temporal fallback
             # This returns a tuple: (matched_hands, unmatched_hands)
             matched_hands, unmatched_hands = self.hand_person_matcher.match_hands_with_temporal_fallback(
                 detected_hands,
-                person_id_mapping,  # Current frame's person poses (stable_person_id -> pose_landmarks)
+                current_person_poses,  # Current frame's person poses (stable_person_id -> pose_landmarks)
                 pose_history,  # Historical poses for temporal matching
                 self.hand_detector
             )
