@@ -19,13 +19,15 @@ import {
   Assessment,
   Storage,
   MusicNote,
-  Timeline
+  Timeline,
+  CloudUpload
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
 
 const menuItems = [
   { path: '/', label: 'Home', icon: <Home /> },
+  { path: '/upload', label: 'Upload Video', icon: <CloudUpload /> },
   { path: '/processing', label: 'Processing', icon: <PlayArrow /> },
   { path: '/results', label: 'Results', icon: <Assessment /> },
   { path: '/visualization', label: 'Visualization', icon: <Timeline /> },
