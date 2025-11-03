@@ -1,0 +1,1434 @@
+================================================================================
+MUSICIAN TRACKING SYSTEM - COMPLETE SETUP GUIDE (macOS)
+================================================================================
+
+Last Updated: 2025-01-28
+Project: Musician Posture and Gesture Tracking System
+Platform: macOS (Apple Silicon / Intel)
+
+⚠️ NOTE: This guide is specifically for macOS setup.
+   For Windows/Linux, some commands will differ.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. Prerequisites
+2. Git Clone & Project Setup
+3. Project Structure Overview
+4. Python Environment Setup
+5. Install Dependencies
+6. Download MediaPipe Models
+7. PostgreSQL Database Setup (with TablePlus)
+8. Configuration Setup
+9. Web Interface Setup
+10. Running the System
+11. Testing Individual Components
+12. Troubleshooting
+13. Common Commands Reference
+
+================================================================================
+1. PREREQUISITES (macOS)
+================================================================================
+
+Before starting, ensure you have:
+
+□ macOS 11 (Big Sur) or higher
+
+□ Homebrew package manager
+  - Install: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  - Check: brew --version
+
+□ Python 3.8 or higher
+  - Install: brew install python@3.11
+  - Check: python3 --version
+
+□ Git
+  - Check: git --version
+  - Install: brew install git
+
+□ Node.js 16+ (for web interface)
+  - Install: brew install node@20
+  - Check: node --version
+
+□ pip (Python package installer)
+  - Check: pip3 --version
+
+□ ffmpeg (for video/audio processing)
+  - Install: brew install ffmpeg
+  - Check: ffmpeg -version
+
+□ PostgreSQL 16 (with TablePlus for GUI)
+  - Install: brew install postgresql@16
+  - TablePlus: brew install --cask tableplus
+
+□ At least 8GB RAM (16GB recommended for transcript processing)
+
+□ 20GB+ free disk space (for models, videos, and outputs)
+
+================================================================================
+2. GIT CLONE & PROJECT SETUP
+================================================================================
+
+Step 1: Clone the repository
+----------------------------
+cd /path/to/your/projects
+git clone <repository-url> Musician-Tracking
+cd Musician-Tracking
+
+Step 2: Verify project structure
+--------------------------------
+ls -la
+
+You should see:
+- src/
+- requirements.txt
+- CLAUDE.md
+- README.md
+- SETUP.txt (this file)
+
+Step 3: Download data from Google Drive
+---------------------------------------
+📦 Download the following folders from the shared Google Drive link:
+   - checkpoints/    (YOLO models and MediaPipe models)
+   - video/          (Test videos and sample datasets)
+
+   [Drive Link: TO BE ADDED]
+
+   After downloading, place them in the project root:
+   Musician-Tracking/
+   ├── checkpoints/
+   └── video/
+
+⚠️ Note: These folders are large (~5-10GB) and are not included in the Git repository.
+
+================================================================================
+3. PROJECT STRUCTURE OVERVIEW
+================================================================================
+
+Complete Project Structure:
+---------------------------
+
+Musician-Tracking/
+├── .env                              # Environment variables (create this)
+├── .gitignore
+├── CLAUDE.md                         # Project documentation
+├── README.md                         # Project overview
+├── SETUP.txt                         # This file
+├── requirements.txt                  # Python dependencies
+│
+├── checkpoints/                      # Model weights (download from Drive)
+│   ├── yolo11n-pose.pt              # YOLO pose model
+│   ├── yolov8n-face.pt              # YOLO face model
+│   ├── pose_landmarker_heavy.task   # MediaPipe pose model
+│   ├── hand_landmarker.task         # MediaPipe hand model
+│   └── face_landmarker.task         # MediaPipe face model
+│
+├── video/                            # Test videos (download from Drive)
+│   ├── test_video.mp4
+│   └── multi-cam video/             # Multi-camera test datasets
+│       └── vid_shot1/
+│           └── original_video/
+│               ├── cam_1.mp4
+│               ├── cam_2.mp4
+│               └── ...
+│
+├── src/                              # Source code
+│   ├── __init__.py
+│   ├── detect_v2_2d.py              # 2D detection script
+│   ├── detect_v2_3d.py              # 3D detection script (main)
+│   ├── integrated_video_processor.py # Full pipeline processor
+│   ├── integrated_video_processor_v2.py
+│   ├── test_detection_processor.py  # Testing script
+│   │
+│   ├── analysis/                     # Analysis tools
+│   │   ├── detect_with_heatmap.py
+│   │   ├── orientation_tracker.py
+│   │   └── video_emotion_analysis.py
+│   │
+│   ├── bad_gesture/                  # Bad gesture detection
+│   │   ├── __init__.py
+│   │   ├── bad_gestures_2d.py
+│   │   └── bad_gestures_3d.py
+│   │
+│   ├── config/                       # Configuration files
+│   │   ├── config_v1.yaml           # Config version 1
+│   │   └── config_v2.yaml           # Config version 2 (multi-person)
+│   │
+│   ├── database/                     # Database modules
+│   │   ├── __init__.py
+│   │   ├── setup.py                 # Database connection
+│   │   └── database_setup_v2.py
+│   │
+│   ├── models/                       # Detection models
+│   │   ├── __init__.py
+│   │   ├── emotion/                 # Emotion detection
+│   │   │   ├── __init__.py
+│   │   │   └── base_emotion_detector.py
+│   │   ├── face/                    # Face detection
+│   │   │   ├── __init__.py
+│   │   │   └── yolo.py
+│   │   ├── facemesh/                # Face mesh detection
+│   │   │   ├── __init__.py
+│   │   │   └── mediapipe.py
+│   │   ├── hand/                    # Hand detection
+│   │   │   ├── __init__.py
+│   │   │   ├── mediapipe.py
+│   │   │   └── yolo.py
+│   │   ├── pose/                    # Pose detection
+│   │   │   ├── __init__.py
+│   │   │   ├── mediapipe.py
+│   │   │   └── yolo.py
+│   │   └── transcript/              # Speech recognition
+│   │       ├── __init__.py
+│   │       └── whisper_realtime.py
+│   │
+│   ├── output/                       # Output directory (auto-created)
+│   │   ├── aligned_videos/          # Time-aligned videos
+│   │   ├── annotated_detection_videos/ # Detection videos
+│   │   ├── unified_videos/          # Combined multi-camera views
+│   │   └── uploads/                 # Web uploaded videos
+│   │
+│   ├── processors/                   # Modular processors
+│   │   ├── __init__.py
+│   │   ├── README.md
+│   │   ├── detection_processor.py
+│   │   └── video_alignment_processor.py
+│   │
+│   ├── screen_state_detector/        # Screen state detection
+│   │   └── ...
+│   │
+│   ├── test/                         # Test files
+│   │   └── test_model/              # Model-specific tests
+│   │       ├── test_emotion.py
+│   │       ├── test_face.py
+│   │       ├── test_hand.py
+│   │       ├── test_pose.py
+│   │       └── test_transcript.py
+│   │
+│   ├── utils/                        # Utility modules
+│   │   └── person_tracker.py        # Person tracking utilities
+│   │
+│   ├── video_aligner/                # Video alignment tools
+│   │   └── shape_based_aligner_multi.py
+│   │
+│   └── web/                          # Web interface
+│       ├── README.md
+│       ├── QUICK_START.md
+│       ├── start-backend.sh         # Backend startup script
+│       ├── start-frontend.sh        # Frontend startup script
+│       │
+│       ├── backend/                  # FastAPI backend
+│       │   ├── main.py              # API entry point
+│       │   ├── requirements.txt     # Backend dependencies
+│       │   ├── websocket_manager.py
+│       │   └── routers/             # API routes
+│       │       ├── __init__.py
+│       │       ├── config.py
+│       │       ├── database.py
+│       │       ├── files.py
+│       │       └── processing.py    # Video processing endpoints
+│       │
+│       └── frontend/                 # React frontend
+│           ├── package.json         # Node dependencies
+│           ├── tsconfig.json        # TypeScript config
+│           ├── public/              # Static files
+│           └── src/
+│               ├── App.tsx          # Main app component
+│               ├── index.tsx
+│               ├── config.ts
+│               ├── components/      # Reusable components
+│               │   ├── FileBrowser.tsx
+│               │   ├── Navigation.tsx
+│               │   ├── OutputDisplay.tsx
+│               │   └── ProcessingForm.tsx
+│               ├── hooks/           # React hooks
+│               │   └── useWebSocket.tsx
+│               ├── pages/           # Page components
+│               │   ├── DatabasePage.tsx
+│               │   ├── HomePage.tsx
+│               │   ├── ProcessingPage.tsx
+│               │   ├── ResultsPage.tsx
+│               │   ├── SettingsPage.tsx
+│               │   ├── VideoUploadPage.tsx  # NEW! Video upload with person selection
+│               │   └── VisualizationPage.tsx
+│               ├── services/        # API services
+│               │   └── api.ts
+│               └── types/           # TypeScript types
+│                   └── index.ts
+│
+└── venv/                             # Virtual environment (auto-created)
+
+
+Key Directories:
+----------------
+• checkpoints/    - Model weights (download from Drive)
+• video/          - Test videos (download from Drive)
+• src/output/     - Generated outputs (auto-created)
+• src/config/     - Configuration files
+• src/models/     - Detection model implementations
+• src/web/        - Web interface (frontend + backend)
+• src/processors/ - Modular processing system
+
+
+================================================================================
+4. PYTHON ENVIRONMENT SETUP
+================================================================================
+
+Option A: Using venv (Recommended)
+-----------------------------------
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On Mac/Linux:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
+
+# Verify activation (you should see (venv) in prompt)
+which python
+
+
+Option B: Using conda
+--------------------
+# Create conda environment
+conda create -n musician-tracking python=3.10
+
+# Activate environment
+conda activate musician-tracking
+
+
+================================================================================
+4. INSTALL DEPENDENCIES
+================================================================================
+
+Step 1: Upgrade pip
+------------------
+pip install --upgrade pip
+
+
+Step 2: Install required packages
+---------------------------------
+pip install -r requirements.txt
+
+This will install:
+- mediapipe          (pose, hand, face detection)
+- opencv-python      (video processing)
+- ultralytics        (YOLO models)
+- numpy              (numerical operations)
+- torch, torchvision (deep learning)
+- deepface           (emotion detection)
+- fer                (facial expression recognition)
+- openai-whisper     (transcript/speech recognition)
+- pyaudio            (audio processing)
+- ffmpeg-python      (video encoding)
+- sqlalchemy         (database ORM)
+- psycopg2-binary    (PostgreSQL adapter)
+- pyyaml             (configuration files)
+- matplotlib         (visualization)
+- supabase           (cloud database, optional)
+- python-dotenv      (environment variables)
+
+
+Step 3: Verify installation
+---------------------------
+python3 -c "import cv2, mediapipe, torch, whisper; print('✅ All packages installed')"
+
+
+Step 4: Create output directories
+---------------------------------
+mkdir -p src/output/aligned_videos
+mkdir -p src/output/annotated_detection_videos
+mkdir -p src/output/unified_videos
+mkdir -p src/output/uploads
+
+
+Step 5: Install ffmpeg
+----------------------
+brew install ffmpeg
+
+# Verify installation
+ffmpeg -version
+
+
+================================================================================
+6. DOWNLOAD MEDIAPIPE MODELS
+================================================================================
+
+MediaPipe Models (Required for MediaPipe-based Detection)
+----------------------------------------------------------
+
+Run these commands from the project root directory:
+
+# Create checkpoints directory if it doesn't exist
+mkdir -p checkpoints
+cd checkpoints
+
+# Download Pose Landmarker (Heavy - recommended for accuracy)
+curl -L https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task \
+  -o pose_landmarker_heavy.task
+
+# Download Hand Landmarker
+curl -L https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task \
+  -o hand_landmarker.task
+
+# Download Face Landmarker
+curl -L https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task \
+  -o face_landmarker.task
+
+cd ..
+
+Expected output:
+---------------
+checkpoints/
+├── pose_landmarker_heavy.task   (~26 MB)
+├── hand_landmarker.task         (~9 MB)
+└── face_landmarker.task         (~11 MB)
+
+
+ALTERNATIVE: LITE MODELS (For Faster Processing)
+------------------------------------------------
+
+If you need faster processing at the cost of some accuracy:
+
+# Pose Landmarker Lite (5 MB instead of 26 MB)
+curl -L https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task \
+  -o checkpoints/pose_landmarker_lite.task
+
+
+Verify Downloads:
+----------------
+ls -lh checkpoints/
+
+You should see:
+-rw-r--r--  1 user  staff   26M  Jan 28 10:00 pose_landmarker_heavy.task
+-rw-r--r--  1 user  staff   9.1M Jan 28 10:00 hand_landmarker.task
+-rw-r--r--  1 user  staff   11M  Jan 28 10:00 face_landmarker.task
+
+
+YOLO Models:
+-----------
+YOLO models should be downloaded from the Google Drive link mentioned in Section 2.
+If you need to download manually:
+
+# YOLO11 Pose Model
+# Download from: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolo11n-pose.pt
+# Place in: checkpoints/yolo11n-pose.pt
+
+# YOLO Face Model
+# Download from: https://github.com/derronqi/yolov8-face/releases
+# Place in: checkpoints/yolov8n-face.pt
+
+
+================================================================================
+7. POSTGRESQL DATABASE SETUP (PostgreSQL 16 with TablePlus - macOS)
+================================================================================
+
+POSTGRESQL 16 INSTALLATION (macOS)
+===================================
+
+Step 1: Install PostgreSQL 16 using Homebrew
+--------------------------------------------
+# Install PostgreSQL 16 (latest stable version)
+brew install postgresql@16
+
+# Add PostgreSQL 16 binaries to PATH
+echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# Initialize the database (if needed)
+initdb /opt/homebrew/var/postgresql@16
+
+# Start PostgreSQL service
+brew services start postgresql@16
+
+# Verify PostgreSQL is running
+brew services list | grep postgresql
+
+Expected output:
+postgresql@16 started user ~/Library/LaunchAgents/homebrew.mxcl.postgresql@16.plist
+
+# Check PostgreSQL version
+psql --version
+# Should show: psql (PostgreSQL) 16.x
+
+
+Step 2: Install TablePlus (Database GUI Tool)
+----------------------------------------------
+TablePlus is a modern, native database management tool that makes PostgreSQL much easier to work with.
+
+# Install TablePlus via Homebrew Cask
+brew install --cask tableplus
+
+# Or download directly from website:
+# Visit https://tableplus.com/download
+# Download TablePlus for Mac (Universal - works on Intel & Apple Silicon)
+# Open the .dmg file and drag TablePlus to Applications folder
+
+# Launch TablePlus
+open -a TablePlus
+
+TablePlus Key Features:
+- Native macOS app with excellent performance
+- Visual database browser with tree structure
+- Advanced SQL editor with syntax highlighting and auto-completion
+- Inline data editing (edit cells directly like spreadsheet)
+- Query history and saved queries
+- Data export/import (CSV, JSON, SQL, Excel)
+- Multiple tabs for different queries/tables
+- SSH tunnel support for remote databases
+- Dark/Light theme matching macOS
+- Free version available (with some limitations)
+
+
+Step 3: Create Database and User
+---------------------------------
+
+OPTION A: Using Command Line (psql)
+-----------------------------------
+# Access PostgreSQL with default superuser
+psql postgres
+
+# In the psql prompt, run these commands:
+
+-- Create the database
+CREATE DATABASE "musician_tracking";
+
+-- Create user (replace 'yourpassword' with a secure password, or leave empty for local dev)
+CREATE USER musician_user WITH PASSWORD 'yourpassword';
+
+-- Grant all privileges on the database
+GRANT ALL PRIVILEGES ON DATABASE "musician_tracking" TO musician_user;
+
+-- Connect to the new database
+\c musician_tracking
+
+-- Grant schema privileges
+GRANT ALL ON SCHEMA public TO musician_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO musician_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO musician_user;
+
+-- Exit psql
+\q
+
+
+OPTION B: Using TablePlus (Recommended - Visual Interface)
+----------------------------------------------------------
+Setting up initial connection to PostgreSQL:
+
+1. Open TablePlus
+   open -a TablePlus
+
+2. Click "Create a new connection" or press Cmd+N
+
+3. Select "PostgreSQL" from the connection types
+
+4. Configure initial connection to create database:
+   - Name: PostgreSQL Admin
+   - Host: localhost (or 127.0.0.1)
+   - Port: 5432
+   - User: (your macOS username, or 'postgres' if you set it up)
+   - Password: (leave empty for local connection)
+   - Database: postgres (default database)
+
+5. Click "Test" button to verify connection
+   - Should show "Connection is OK"
+
+6. Click "Connect" to save and connect
+
+7. Creating the database in TablePlus:
+   a. Click the SQL icon in toolbar (or press Cmd+E)
+   b. In the SQL editor, type:
+      CREATE DATABASE musician_tracking;
+      CREATE USER musician_user WITH PASSWORD '';
+      GRANT ALL PRIVILEGES ON DATABASE musician_tracking TO musician_user;
+   c. Press Cmd+Enter to execute
+   d. You should see "Query executed successfully"
+
+8. Create a new connection for the project database:
+   a. Close current tab (Cmd+W)
+   b. Create new connection (Cmd+N)
+   c. Select "PostgreSQL"
+   d. Configure project connection:
+      - Name: Musician Tracking DB
+      - Host: localhost
+      - Port: 5432
+      - User: musician_user
+      - Password: (the password you set above)
+      - Database: musician_tracking
+      - Color: (optional - pick a color to distinguish this connection)
+   e. Click "Test" then "Connect"
+
+Using TablePlus for the Project:
+--------------------------------
+Common TablePlus operations for this project:
+
+1. View Tables:
+   - Tables appear in left sidebar
+   - Double-click to view data
+   - Right-click for options (export, truncate, etc.)
+
+2. Run Queries:
+   - Press Cmd+E for SQL editor
+   - Write your query
+   - Press Cmd+Enter to execute
+   - Results appear below
+
+3. Common Queries for Musician Tracking:
+   -- View all sessions
+   SELECT * FROM sessions ORDER BY created_at DESC LIMIT 10;
+
+   -- Check detection counts
+   SELECT session_id, COUNT(*) as detections
+   FROM pose_landmarks
+   GROUP BY session_id;
+
+   -- View recent hand detections
+   SELECT * FROM hand_landmarks
+   ORDER BY frame_number DESC
+   LIMIT 100;
+
+4. Export Data:
+   - Right-click any table → Export
+   - Choose format: CSV, JSON, SQL
+   - Useful for analysis in Excel/Python
+
+5. Import Data:
+   - File → Import → From CSV
+   - Map columns to table fields
+   - Click Import
+
+6. Keyboard Shortcuts:
+   - Cmd+E: SQL Editor
+   - Cmd+Enter: Execute query
+   - Cmd+R: Refresh
+   - Cmd+S: Save query
+   - Cmd+K: Clear results
+
+
+Step 4: Verify Database Connection
+-----------------------------------
+# Test connection via command line
+psql -U christalva -d musician-tracking -h localhost
+
+# If connection successful, you'll see:
+# musician-tracking=>
+
+# List tables (should be empty initially)
+\dt
+
+# Exit
+\q
+
+# Or verify in TablePlus by connecting to the database
+
+
+ALTERNATIVE: USING SUPABASE (CLOUD DATABASE)
+==========================================
+
+Step 1: Create Supabase project
+-------------------------------
+1. Go to https://supabase.com
+2. Sign up/login
+3. Create new project
+4. Note down:
+   - Project URL
+   - Project API Key (anon/public)
+   - Database password
+
+Step 2: Get connection string
+-----------------------------
+1. Go to Project Settings → Database
+2. Copy "Connection string"
+3. Replace [YOUR-PASSWORD] with your password
+
+
+Step 5: Create .ENV File
+-------------------------
+
+Create .env file in project root with your database credentials:
+
+# Navigate to project root
+cd ~/Desktop/Computer\ Science\ Hub/Mitou\ Project/Musician-Tracking
+
+# Create .env file
+cat > .env << 'EOF'
+# Database Configuration (Local PostgreSQL)
+DATABASE_URL=postgresql://musician_user:yourpassword@localhost:5432/musician_tracking
+
+# Individual database connection details (used by the app)
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=musician_tracking
+DB_USER=musician_user
+DB_PASSWORD=yourpassword
+
+# Video Processing Paths
+VIDEO_INPUT_PATH=video/
+OUTPUT_PATH=src/output/
+
+# Model Configuration
+YOLO_MODEL_PATH=checkpoints/yolo11n-pose.pt
+MEDIAPIPE_POSE_MODEL=checkpoints/pose_landmarker_heavy.task
+MEDIAPIPE_HAND_MODEL=checkpoints/hand_landmarker.task
+MEDIAPIPE_FACE_MODEL=checkpoints/face_landmarker.task
+
+# Optional: Supabase (if using cloud database instead)
+# SUPABASE_URL=https://[PROJECT-REF].supabase.co
+# SUPABASE_KEY=your-anon-key
+EOF
+
+# Verify .env file was created
+cat .env
+
+# IMPORTANT: Replace 'yourpassword' with the actual password you set in PostgreSQL!
+
+
+================================================================================
+8. CONFIGURATION SETUP
+================================================================================
+
+Step 1: Review configuration file
+---------------------------------
+cat src/config/config_v1.yaml
+
+
+Step 2: Update paths in config
+------------------------------
+Edit src/config/config_v1.yaml:
+
+video_aligner:
+  alignment_directory: "/path/to/your/videos"  # UPDATE THIS!
+
+integrated_processor:
+  aligned_videos_dir: "src/output/aligned_videos"
+  detection_videos_dir: "src/output/annotated_detection_videos"
+  unified_videos_dir: "src/output/unified_videos"
+
+database:
+  enabled: true  # Set to true to use database
+
+
+Step 3: Verify output directories
+----------------------------------
+# These should already exist from Section 5
+ls -la src/output/
+
+
+Step 4: Configure detection models
+----------------------------------
+In src/config/config_v1.yaml:
+
+detection:
+  hand_model: "mediapipe"        # or "yolo"
+  pose_model: "mediapipe"        # or "yolo"
+  facemesh_model: "mediapipe"    # or "yolo+mediapipe"
+  emotion_model: "none"          # or "deepface", "ghostfacenet"
+  transcript_model: "none"       # or "whisper"
+
+# Enable transcript
+transcript_settings:
+  whisper:
+    model_size: "base"  # "tiny", "base", "small", "medium", "large"
+    language: null      # Auto-detect, or "en", "ja", etc.
+
+
+================================================================================
+9. WEB INTERFACE SETUP
+================================================================================
+
+The project includes a modern web interface for video upload and processing.
+
+Step 1: Navigate to web directory
+---------------------------------
+cd src/web
+
+
+Step 2: Backend Setup (FastAPI)
+-------------------------------
+cd backend
+
+# Install backend dependencies
+pip install -r requirements.txt
+
+# Start backend server
+python main.py
+
+✅ Backend runs on: http://localhost:8000
+📚 API Docs: http://localhost:8000/docs
+
+Leave this terminal running!
+
+
+Step 3: Frontend Setup (React) - NEW TERMINAL
+---------------------------------------------
+# Open a new terminal window
+cd src/web/frontend
+
+# Install Node.js dependencies (first time only)
+npm install
+
+# Start frontend development server
+npm start
+
+✅ Frontend runs on: http://localhost:3000
+🌐 Opens automatically in browser
+
+Leave this terminal running!
+
+
+Step 4: Access Web Interface
+----------------------------
+Open browser to: http://localhost:3000
+
+Available pages:
+- Home: Process videos from file system
+- Upload Video: NEW! Upload videos with person selection
+- Processing: Monitor real-time job progress
+- Results: View processed videos
+- Database: Query detection data
+- Visualization: Heatmap analysis
+- Settings: Configure models
+
+
+Quick Start Scripts (Alternative):
+----------------------------------
+# Terminal 1 - Backend
+./src/web/start-backend.sh
+
+# Terminal 2 - Frontend
+./src/web/start-frontend.sh
+
+
+For detailed web interface documentation, see:
+- src/web/README.md
+- src/web/QUICK_START.md
+
+
+================================================================================
+10. RUNNING THE SYSTEM (Command Line)
+================================================================================
+
+FULL INTEGRATED PIPELINE
+========================
+
+Step 1: Ensure database is running
+----------------------------------
+# For local PostgreSQL
+brew services list | grep postgresql  # Mac
+sudo systemctl status postgresql      # Linux
+
+# Should show "started" or "active"
+
+
+Step 2: Run integrated video processor
+--------------------------------------
+python3 src/integrated_video_processor.py
+
+# With custom config
+python3 src/integrated_video_processor.py --config src/config/custom_config.yaml
+
+# With command line options
+python3 src/integrated_video_processor.py \
+  --alignment-dir "/path/to/videos" \
+  --max-duration 60 \
+  --no-duration-limit
+
+
+Command Line Options:
+--------------------
+--config, -c          Path to config file (default: src/config/config_v1.yaml)
+--alignment-dir, -a   Path to alignment directory (overrides config)
+--skip-detection      Skip detection processing (only alignment)
+--skip-video-creation Skip video creation (only alignment analysis)
+--max-duration        Maximum duration to process per video (seconds)
+--no-duration-limit   Disable duration limiting (process full videos)
+
+
+Expected Output:
+---------------
+==============================================================================
+INTEGRATED VIDEO PROCESSOR - STARTING
+==============================================================================
+Session ID: integrated_20250124_143022
+Processing directory: /path/to/videos
+
+🔍 Validating processing requirements...
+   🔍 Checking detector dependencies...
+      ✅ MediaPipe available
+      ✅ Ultralytics (YOLO) available
+      ✅ Whisper (transcript) available
+✅ All critical requirements validated
+
+============================================================
+CHECKING EXISTING ALIGNMENT DATA
+============================================================
+🔍 Checking existing alignment data for 4 videos...
+✅ Found 4 chunk alignment records in database
+
+============================================================
+PREPARING VIDEOS FOR DETECTION
+============================================================
+📁 Detected regular videos - using original paths directly...
+✅ Mapped 4 original video paths for detection
+
+============================================================
+RUNNING DETECTION ON ALIGNED VIDEOS
+============================================================
+🎯 Processing detection for cam_1: /path/to/video1.mp4
+[Detection progress...]
+✅ Detection complete for cam_1
+
+[... continues for all videos ...]
+
+==============================================================================
+INTEGRATED VIDEO PROCESSOR - COMPLETED SUCCESSFULLY
+==============================================================================
+
+
+Step 3: Check outputs
+--------------------
+ls -la src/output/annotated_detection_videos/
+ls -la src/output/aligned_videos/
+ls -la src/output/unified_videos/
+
+
+Step 4: Check database
+----------------------
+psql -U musician_user -d musician_tracking
+
+-- View tables
+\dt
+
+-- Check detection results
+SELECT * FROM musician_frame_analysis LIMIT 5;
+
+-- Check transcript results
+SELECT * FROM transcript_segments LIMIT 5;
+
+-- Exit
+\q
+
+
+================================================================================
+11. TESTING INDIVIDUAL COMPONENTS
+================================================================================
+
+TEST 1: DETECTION PROCESSOR ONLY (Includes Transcript)
+======================================================
+
+Basic test (full video):
+-----------------------
+python3 src/test_detection_processor.py \
+  --video /path/to/test_video.mp4 \
+  --camera test_cam
+
+
+Test with duration limit (first 60 seconds):
+-------------------------------------------
+python3 src/test_detection_processor.py \
+  --video /path/to/test_video.mp4 \
+  --camera test_cam \
+  --max-duration 60
+
+
+Test with custom config:
+-----------------------
+python3 src/test_detection_processor.py \
+  --video /path/to/test_video.mp4 \
+  --camera test_cam \
+  --config src/config/config_v1.yaml
+
+
+Test with offset (skip first 10 seconds):
+----------------------------------------
+python3 src/test_detection_processor.py \
+  --video /path/to/test_video.mp4 \
+  --camera test_cam \
+  --offset 10.0 \
+  --processing-type use_offset
+
+
+Expected Output:
+---------------
+==============================================================================
+DETECTION PROCESSOR TEST
+==============================================================================
+Video: /path/to/test_video.mp4
+Camera: test_cam
+
+DetectionProcessor - Dependency Validation
+   ✅ opencv-python available
+   ✅ mediapipe available
+   ✅ Whisper (transcript) available
+✅ All dependencies validated
+
+DetectionProcessor - Processing
+   🎬 Starting video processing...
+   🤚 Hand detection: 95.2% success
+   🏃 Pose detection: 98.1% success
+   🎤 Transcript: "Hello, this is a test..."
+✅ Detection complete
+
+Output videos:
+  test_cam: src/output/annotated_detection_videos/vid_test_cam_[timestamp].mp4
+
+
+TEST 2: MAIN DETECTION SCRIPT
+=============================
+
+Run with webcam:
+---------------
+python3 src/detect_v2_3d.py
+
+
+Run with video file:
+-------------------
+python3 src/detect_v2_3d.py --video /path/to/video.mp4
+
+
+Run with custom config:
+----------------------
+python3 src/detect_v2_3d.py \
+  --config src/config/config_v1.yaml \
+  --video /path/to/video.mp4
+
+
+Skip frames (process every 2nd frame):
+-------------------------------------
+python3 src/detect_v2_3d.py \
+  --video /path/to/video.mp4 \
+  --skip-frames 1
+
+
+TEST 3: MODEL-SPECIFIC TESTS
+============================
+
+Test hand detection:
+-------------------
+python3 src/test/test_model/test_hand.py
+
+
+Test pose detection:
+-------------------
+python3 src/test/test_model/test_pose.py
+
+
+Test face detection:
+-------------------
+python3 src/test/test_model/test_face.py
+
+
+Test emotion detection:
+----------------------
+python3 src/test/test_model/test_emotion.py
+
+
+Test transcript:
+---------------
+python3 src/test/test_model/test_transcript.py
+
+
+TEST 4: VIDEO ALIGNMENT ONLY
+============================
+
+Run alignment without detection:
+-------------------------------
+python3 src/integrated_video_processor.py \
+  --alignment-dir /path/to/videos \
+  --skip-detection
+
+
+TEST 5: DATABASE CONNECTION TEST
+================================
+
+Test database connection:
+------------------------
+python3 -c "
+from src.database.setup import VideoAlignmentDatabase
+db = VideoAlignmentDatabase()
+print('✅ Database connection successful')
+"
+
+
+================================================================================
+12. TROUBLESHOOTING
+================================================================================
+
+ISSUE: ModuleNotFoundError: No module named 'mediapipe'
+-------------------------------------------------------
+Solution:
+pip install mediapipe
+
+
+ISSUE: ModuleNotFoundError: No module named 'whisper'
+-----------------------------------------------------
+Solution:
+pip install openai-whisper
+
+
+ISSUE: Database connection failed
+---------------------------------
+Solutions:
+1. Check PostgreSQL is running:
+   brew services list | grep postgresql@16
+   # Should show: postgresql@16 started
+
+2. Verify credentials in .env file match your setup:
+   cat .env | grep DB_
+
+3. Test connection from command line:
+   psql -U musician_user -d musician_tracking -h localhost
+
+4. Check if port 5432 is available:
+   lsof -i :5432
+
+5. If using TablePlus, verify connection settings:
+   - Host must be: localhost or 127.0.0.1
+   - Port: 5432
+   - Database name: musician_tracking (with underscore)
+   - User: musician_user
+
+
+ISSUE: TablePlus connection issues
+-----------------------------------
+Solutions:
+1. "Connection refused" error:
+   - Ensure PostgreSQL is running: brew services start postgresql@16
+   - Try 127.0.0.1 instead of localhost
+
+2. "Authentication failed":
+   - Check username/password in TablePlus matches what you created
+   - For local dev, try leaving password empty
+   - Reset password if needed:
+     psql postgres -c "ALTER USER musician_user PASSWORD 'newpassword';"
+
+3. "Database does not exist":
+   - Connect to 'postgres' database first
+   - Create the database: CREATE DATABASE musician_tracking;
+   - Then create new connection to musician_tracking
+
+4. TablePlus shows empty/no tables:
+   - Run database initialization: python src/database/database_setup_v2.py
+   - Refresh TablePlus view: Cmd+R
+   - Check you're connected to correct database (shown in window title)
+
+
+ISSUE: ffmpeg not found
+-----------------------
+Solution:
+brew install ffmpeg  # Mac
+sudo apt-get install ffmpeg  # Linux
+
+
+ISSUE: Out of memory (Whisper transcript)
+-----------------------------------------
+Solution:
+Use smaller model in config:
+transcript_settings:
+  whisper:
+    model_size: "tiny"  # or "base" instead of "large"
+
+
+ISSUE: YOLO model not found
+---------------------------
+Solution:
+1. Check checkpoints/ directory exists
+2. Verify model path in config:
+   detection:
+     yolo_pose_model_path: "checkpoints/yolo11n-pose.pt"
+
+
+ISSUE: No faces detected
+------------------------
+Solutions:
+1. Check video has visible faces
+2. Try different face detection model:
+   detection:
+     facemesh_model: "yolo+mediapipe"
+3. Adjust confidence threshold
+
+
+ISSUE: Permission denied on video files
+---------------------------------------
+Solution:
+chmod +r /path/to/videos/*.mp4
+
+
+ISSUE: Slow processing
+---------------------
+Solutions:
+1. Use smaller Whisper model (tiny/base)
+2. Skip frames:
+   python3 src/detect_v2_3d.py --skip-frames 2
+3. Process shorter duration:
+   --max-duration 60
+4. Disable unused models in config
+
+
+================================================================================
+13. COMMON COMMANDS REFERENCE (macOS)
+================================================================================
+
+ENVIRONMENT
+-----------
+# Activate virtual environment
+source venv/bin/activate
+
+# Deactivate
+deactivate
+
+
+DATABASE (macOS with PostgreSQL 16)
+------------------------------------
+# Start PostgreSQL 16
+brew services start postgresql@16
+
+# Stop PostgreSQL 16
+brew services stop postgresql@16
+
+# Restart PostgreSQL 16
+brew services restart postgresql@16
+
+# Check PostgreSQL status
+brew services list | grep postgresql
+pg_isready  # Quick check if accepting connections
+
+# Access database via command line
+psql -U musician_user -d musician_tracking
+
+# Common psql commands
+\l              # List all databases
+\dt             # List all tables
+\d table_name   # Describe table structure
+\q              # Quit psql
+
+# TablePlus operations
+open -a TablePlus                    # Open TablePlus
+# Then use GUI or keyboard shortcuts:
+# Cmd+N: New connection
+# Cmd+E: SQL Editor
+# Cmd+Enter: Execute query
+# Cmd+S: Save query
+# Cmd+R: Refresh data
+
+# Backup database
+pg_dump -U musician_user musician_tracking > backup_$(date +%Y%m%d).sql
+
+# Restore database
+psql -U musician_user musician_tracking < backup.sql
+
+# Quick database reset (CAUTION: deletes all data)
+psql -U musician_user -d musician_tracking -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+python src/database/database_setup_v2.py  # Recreate tables
+
+
+WEB INTERFACE
+-------------
+# Start backend
+cd src/web/backend && python main.py
+
+# Start frontend
+cd src/web/frontend && npm start
+
+# Or use convenience scripts
+./src/web/start-backend.sh
+./src/web/start-frontend.sh
+
+
+PROCESSING
+----------
+# Full pipeline
+python3 src/integrated_video_processor.py
+
+# Detection only (test)
+python3 src/test_detection_processor.py --video /path/to/video.mp4 --camera cam_1
+
+# Main detection script
+python3 src/detect_v2_3d.py --video /path/to/video.mp4
+
+# With duration limit
+python3 src/integrated_video_processor.py --max-duration 60
+
+# Skip detection
+python3 src/integrated_video_processor.py --skip-detection
+
+
+MODEL TESTS
+-----------
+# Test all models
+python3 src/test/test_model/test_hand.py
+python3 src/test/test_model/test_pose.py
+python3 src/test/test_model/test_face.py
+python3 src/test/test_model/test_emotion.py
+python3 src/test/test_model/test_transcript.py
+
+
+OUTPUT
+------
+# View output videos
+ls -la src/output/annotated_detection_videos/
+
+# View logs
+tail -f logs/processing.log  # if logging enabled
+
+# Check database records (command line)
+psql -U christalva -d musician-tracking -c "SELECT COUNT(*) FROM musician_frame_analysis;"
+
+# Or use TablePlus for visual inspection
+
+
+CLEANUP
+-------
+# Remove output videos
+rm -rf src/output/*/
+
+# Clear database tables
+psql -U christalva -d musician-tracking -c "TRUNCATE TABLE musician_frame_analysis CASCADE;"
+
+# Remove virtual environment
+rm -rf venv/
+
+
+================================================================================
+QUICK START SUMMARY (macOS with PostgreSQL 16 & TablePlus)
+================================================================================
+
+1. Install prerequisites
+   brew install python@3.11 node@20 postgresql@16 ffmpeg
+   brew install --cask tableplus
+   echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+
+2. Clone repository and download data
+   git clone <repo-url> Musician-Tracking && cd Musician-Tracking
+   # Download checkpoints/ and video/ from Google Drive [link TBD]
+
+3. Create virtual environment
+   python3 -m venv venv && source venv/bin/activate
+
+4. Install Python dependencies
+   pip install -r requirements.txt
+
+5. Download MediaPipe models
+   mkdir -p checkpoints && cd checkpoints
+   curl -L https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task -o pose_landmarker_heavy.task
+   curl -L https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task -o hand_landmarker.task
+   curl -L https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task -o face_landmarker.task
+   cd ..
+
+6. Setup PostgreSQL 16 Database
+   brew services start postgresql@16
+   psql postgres -c "CREATE DATABASE musician_tracking;"
+   psql postgres -c "CREATE USER musician_user WITH PASSWORD 'yourpassword';"
+   psql postgres -c "GRANT ALL PRIVILEGES ON DATABASE musician_tracking TO musician_user;"
+
+7. Setup with TablePlus (Alternative to step 6)
+   open -a TablePlus
+   # Create connection to localhost:5432, user: your_mac_username, database: postgres
+   # Run SQL: CREATE DATABASE musician_tracking; CREATE USER musician_user;
+   # Create new connection for musician_tracking database
+
+8. Configure .env
+   cat > .env << EOF
+   DB_HOST=localhost
+   DB_PORT=5432
+   DB_NAME=musician_tracking
+   DB_USER=musician_user
+   DB_PASSWORD=yourpassword
+   EOF
+
+9. Initialize database tables
+   python src/database/database_setup_v2.py
+
+10. Create output directories
+    mkdir -p src/output/{aligned_videos,annotated_detection_videos,unified_videos,uploads}
+
+11. Start Web Interface (Optional)
+    # Terminal 1: Backend
+    cd src/web/backend && pip install -r requirements.txt && python main.py
+    # Terminal 2: Frontend
+    cd src/web/frontend && npm install && npm start
+
+12. Test detection (quick test)
+    python3 src/detect_v2_3d.py --webcam  # Test with webcam
+    # OR
+    python3 src/test_detection_processor.py --video video/test_video.mp4 --camera test --max-duration 30
+
+13. Run full pipeline
+    python3 src/integrated_video_processor.py
+
+14. View results in TablePlus
+    open -a TablePlus
+    # Connect to musician_tracking database
+    # Query: SELECT * FROM sessions ORDER BY created_at DESC;
+
+
+================================================================================
+SUPPORT & DOCUMENTATION
+================================================================================
+
+Project Documentation:
+- CLAUDE.md - Main project configuration and structure
+- README.md - Project overview
+- SETUP.txt - This setup guide (macOS)
+- src/processors/README.md - Modular processing system documentation
+- src/web/README.md - Web interface full documentation
+- src/web/QUICK_START.md - Web interface quick start guide
+
+GitHub Issues:
+- Report bugs and issues at: <repository-url>/issues
+
+Configuration Files:
+- src/config/config_v1.yaml - Main configuration file
+- src/config/config_v2.yaml - Multi-person detection configuration
+- .env - Environment variables and database credentials
+
+Database Tools:
+- TablePlus - GUI database management tool
+- psql - Command line PostgreSQL client
+
+Web Interface:
+- Backend: http://localhost:8000 (FastAPI + Python)
+- Frontend: http://localhost:3000 (React + TypeScript)
+- API Docs: http://localhost:8000/docs
+
+Key Features:
+- Video upload with person selection (single/multiple)
+- Real-time processing progress with WebSocket
+- Database visualization
+- Multi-camera video alignment
+- Bad gesture detection
+- Emotion and transcript analysis
+
+
+================================================================================
+PLATFORM NOTES
+================================================================================
+
+This guide is specific to macOS. Key differences for other platforms:
+
+Windows:
+- Use WSL2 or native Windows installation
+- Package manager: chocolatey instead of homebrew
+- Virtual environment activation: venv\Scripts\activate
+- Path separators: backslash (\) instead of forward slash (/)
+
+Linux:
+- Package manager: apt/yum instead of homebrew
+- PostgreSQL: sudo systemctl instead of brew services
+- Most commands similar to macOS
+
+
+================================================================================
+END OF SETUP GUIDE - macOS VERSION
+================================================================================
+
+Last Updated: 2025-01-28
+Platform: macOS (Apple Silicon / Intel Compatible)
+
+For updates and issues, check the project repository.
+For web interface help, see src/web/README.md
+
+Happy tracking! 🎵🎸🎹
