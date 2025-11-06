@@ -1,11 +1,8 @@
 """
-Multicam Screen Change Detector - IMPROVED VERSION
+Multicam Screen Change Detector - CANNY EDGE VERSION
 
-Key improvements:
-1. Better grid divider detection with lower thresholds
-2. Multi-strategy layout detection (edges + color consistency)
-3. Enhanced debugging output
-4. Adaptive thresholds based on video characteristics
+Uses Canny edge detection to find grid dividers.
+This is much more robust for detecting subtle divider lines.
 """
 
 import cv2
@@ -15,6 +12,27 @@ from dataclasses import dataclass, asdict
 from typing import List, Tuple, Optional
 import argparse
 from pathlib import Path
+
+# ============================================================================
+# CONFIGURATION CONSTANTS
+# ============================================================================
+
+# Change detection
+STABILITY_THRESHOLD = 2  # Only need 2 consecutive frames to confirm a change
+
+# Quadrant activity detection
+BRIGHTNESS_THRESHOLD = 30  # Threshold for black screen detection
+EDGE_THRESHOLD = 0.1  # Threshold for edge density in quadrants
+
+# Canny edge detection parameters
+CANNY_LOW_THRESHOLD = 50
+CANNY_HIGH_THRESHOLD = 150
+
+# Grid layout detection
+VERTICAL_DIVIDER_MIN_LENGTH = 0.4  # 40% of height
+HORIZONTAL_DIVIDER_MIN_LENGTH = 0.4  # 40% of width
+DIVIDER_THICKNESS_TOLERANCE = 5  # pixels around center line to check
+EDGE_DENSITY_THRESHOLD = 0.3  # 30% of sampled points must have edges
 
 
 @dataclass
@@ -47,38 +65,14 @@ class StateChange:
 
 class ScreenStateDetector:
     """
-    Detects changes in multicam screen layout and camera states.
+    Detects changes in multicam screen layout using Canny edge detection.
 
-    Algorithm:
-    1. Layout Detection: Multi-strategy approach (edges + variance + color)
-    2. Activity Detection: Checks each quadrant's brightness and edge density
-    3. Change Detection: Compares state fingerprints with stability threshold
-    4. Motion Filtering: Ignores content movement, only tracks structural changes
+    Key insight: Grid dividers create strong continuous vertical and horizontal
+    edges that Canny can detect reliably.
     """
 
-    # Configuration constants
-    STABILITY_THRESHOLD = 5  # Frames needed to confirm a change
-    BRIGHTNESS_THRESHOLD = 30  # Threshold for black screen detection
-    EDGE_THRESHOLD = 0.1  # Threshold for edge density
-    
-    # IMPROVED: Lower thresholds for better divider detection
-    EDGE_DIFF_THRESHOLD = 8  # Lowered from 20 to catch subtle dividers
-    EDGE_CONTENT_THRESHOLD = 30  # Threshold for content variation
-    GRID_EDGE_RATIO_THRESHOLD = 0.10  # Lowered from 0.3 to be more sensitive
-    
-    # NEW: Additional detection strategies
-    DIVIDER_COLOR_CONSISTENCY_THRESHOLD = 0.7  # For detecting consistent divider colors
-    VARIANCE_THRESHOLD = 100  # For detecting low-variance divider regions
-
     def __init__(self, video_path: str, duration_override: Optional[float] = None, debug: bool = False):
-        """
-        Initialize the detector with a video file.
-
-        Args:
-            video_path: Path to the video file to analyze
-            duration_override: Optional actual video duration in seconds to calculate correct FPS
-            debug: If True, print detailed debug information
-        """
+        """Initialize the detector with a video file."""
         self.video_path = video_path
         self.cap = cv2.VideoCapture(video_path)
         self.debug = debug
@@ -107,9 +101,16 @@ class ScreenStateDetector:
         self.stable_frames: int = 0
         self.frame_count: int = 0
 
-    def detect_layout_enhanced(self, frame: np.ndarray) -> Tuple[str, dict]:
+    def detect_layout_canny(self, frame: np.ndarray) -> Tuple[str, dict]:
         """
-        Enhanced layout detection using multiple strategies.
+        Detect layout using Canny edge detection.
+        
+        Strategy:
+        1. Apply Canny edge detection to find all edges
+        2. Check for strong vertical edge line at center
+        3. Check for strong horizontal edge line at center
+        4. If both present with sufficient length → grid
+        5. Otherwise → fullscreen
         
         Returns:
             Tuple of (layout_type, debug_info)
@@ -117,214 +118,207 @@ class ScreenStateDetector:
         height, width = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 1.4)
+        
+        # Apply Canny edge detection
+        edges = cv2.Canny(blurred, CANNY_LOW_THRESHOLD, CANNY_HIGH_THRESHOLD)
+        
         center_x = width // 2
         center_y = height // 2
         
         debug_info = {}
         
-        # Strategy 1: Edge Detection (Original method, improved)
-        vertical_edges, v_samples = self._detect_divider_edges(gray, center_x, True, height)
-        horizontal_edges, h_samples = self._detect_divider_edges(gray, center_y, False, width)
+        # Check vertical divider (with tolerance for thickness)
+        vertical_edge_count = 0
+        vertical_samples = 0
         
-        v_edge_ratio = vertical_edges / v_samples if v_samples > 0 else 0
-        h_edge_ratio = horizontal_edges / h_samples if h_samples > 0 else 0
+        y_start = int(height * 0.1)
+        y_end = int(height * 0.9)
         
-        debug_info['v_edge_ratio'] = v_edge_ratio
-        debug_info['h_edge_ratio'] = h_edge_ratio
-        
-        # Strategy 2: Color Consistency (NEW)
-        # Dividers are usually uniform gray/black lines
-        v_color_consistency = self._check_color_consistency(gray, center_x, True, height)
-        h_color_consistency = self._check_color_consistency(gray, center_y, False, width)
-        
-        debug_info['v_color_consistency'] = v_color_consistency
-        debug_info['h_color_consistency'] = h_color_consistency
-        
-        # Strategy 3: Low Variance Detection (NEW)
-        # Dividers have low pixel variance compared to content
-        v_variance = self._calculate_line_variance(gray, center_x, True, height)
-        h_variance = self._calculate_line_variance(gray, center_y, False, width)
-        
-        debug_info['v_variance'] = v_variance
-        debug_info['h_variance'] = h_variance
-        
-        # Voting system: Multiple strategies must agree
-        v_votes = 0
-        h_votes = 0
-        
-        # Vote 1: Edge detection
-        if v_edge_ratio > self.GRID_EDGE_RATIO_THRESHOLD:
-            v_votes += 1
-        if h_edge_ratio > self.GRID_EDGE_RATIO_THRESHOLD:
-            h_votes += 1
+        for y in range(y_start, y_end, 2):  # Sample every 2 pixels
+            # Check a band around the center (not just a single line)
+            has_edge = False
+            for x_offset in range(-DIVIDER_THICKNESS_TOLERANCE,
+                                 DIVIDER_THICKNESS_TOLERANCE + 1):
+                x = center_x + x_offset
+                if 0 <= x < width:
+                    if edges[y, x] > 0:
+                        has_edge = True
+                        break
             
-        # Vote 2: Color consistency
-        if v_color_consistency > self.DIVIDER_COLOR_CONSISTENCY_THRESHOLD:
-            v_votes += 1
-        if h_color_consistency > self.DIVIDER_COLOR_CONSISTENCY_THRESHOLD:
-            h_votes += 1
+            if has_edge:
+                vertical_edge_count += 1
+            vertical_samples += 1
+        
+        vertical_edge_density = vertical_edge_count / vertical_samples if vertical_samples > 0 else 0
+        
+        # Check horizontal divider (with tolerance for thickness)
+        horizontal_edge_count = 0
+        horizontal_samples = 0
+        
+        x_start = int(width * 0.1)
+        x_end = int(width * 0.9)
+        
+        for x in range(x_start, x_end, 2):  # Sample every 2 pixels
+            # Check a band around the center
+            has_edge = False
+            for y_offset in range(-DIVIDER_THICKNESS_TOLERANCE,
+                                 DIVIDER_THICKNESS_TOLERANCE + 1):
+                y = center_y + y_offset
+                if 0 <= y < height:
+                    if edges[y, x] > 0:
+                        has_edge = True
+                        break
             
-        # Vote 3: Low variance (dividers are uniform)
-        if v_variance < self.VARIANCE_THRESHOLD:
-            v_votes += 1
-        if h_variance < self.VARIANCE_THRESHOLD:
-            h_votes += 1
+            if has_edge:
+                horizontal_edge_count += 1
+            horizontal_samples += 1
         
-        debug_info['v_votes'] = v_votes
-        debug_info['h_votes'] = h_votes
+        horizontal_edge_density = horizontal_edge_count / horizontal_samples if horizontal_samples > 0 else 0
         
-        # Grid if both dividers detected (need at least 2/3 votes each)
-        is_grid = v_votes >= 2 and h_votes >= 2
+        debug_info['vertical_edge_density'] = vertical_edge_density
+        debug_info['horizontal_edge_density'] = horizontal_edge_density
+        debug_info['vertical_edge_count'] = vertical_edge_count
+        debug_info['horizontal_edge_count'] = horizontal_edge_count
+        
+        # Decision: Grid if both dividers detected
+        has_vertical_divider = vertical_edge_density >= EDGE_DENSITY_THRESHOLD
+        has_horizontal_divider = horizontal_edge_density >= EDGE_DENSITY_THRESHOLD
+        
+        is_grid = has_vertical_divider and has_horizontal_divider
+        
+        debug_info['has_vertical_divider'] = has_vertical_divider
+        debug_info['has_horizontal_divider'] = has_horizontal_divider
+        debug_info['is_grid'] = is_grid
         
         return ('grid' if is_grid else 'fullscreen'), debug_info
 
-    def _detect_divider_edges(self, gray: np.ndarray, position: int, is_vertical: bool, 
-                              dimension: int) -> Tuple[int, int]:
-        """
-        Detect edges along a line (vertical or horizontal).
-        
-        Returns:
-            Tuple of (edge_count, sample_count)
-        """
-        edges = 0
-        samples = 0
-        
-        # Sample a larger region (80% instead of 40%)
-        start = int(dimension * 0.1)
-        end = int(dimension * 0.9)
-        
-        for i in range(start, end, 2):  # Sample every 2 pixels for speed
-            if is_vertical:
-                center_val = int(gray[i, position])
-                left_val = int(gray[i, max(0, position - 1)])
-                right_val = int(gray[i, min(gray.shape[1] - 1, position + 1)])
-            else:
-                center_val = int(gray[position, i])
-                top_val = int(gray[max(0, position - 1), i])
-                bottom_val = int(gray[min(gray.shape[0] - 1, position + 1), i])
-                left_val = top_val
-                right_val = bottom_val
-            
-            # Check for edge on either side
-            diff = max(abs(center_val - left_val), abs(center_val - right_val))
-            if diff > self.EDGE_DIFF_THRESHOLD:
-                edges += 1
-            
-            samples += 1
-        
-        return edges, samples
-
-    def _check_color_consistency(self, gray: np.ndarray, position: int, 
-                                 is_vertical: bool, dimension: int) -> float:
-        """
-        Check if a line has consistent color (characteristic of dividers).
-        
-        Returns:
-            Consistency score (0.0 to 1.0)
-        """
-        start = int(dimension * 0.1)
-        end = int(dimension * 0.9)
-        
-        values = []
-        for i in range(start, end, 5):
-            if is_vertical:
-                values.append(int(gray[i, position]))
-            else:
-                values.append(int(gray[position, i]))
-        
-        if len(values) < 2:
-            return 0.0
-        
-        # Calculate coefficient of variation
-        mean_val = np.mean(values)
-        std_val = np.std(values)
-        
-        if mean_val == 0:
-            return 0.0
-        
-        # Lower CV = more consistent = more likely a divider
-        cv = std_val / mean_val
-        consistency = max(0.0, 1.0 - cv)
-        
-        return consistency
-
-    def _calculate_line_variance(self, gray: np.ndarray, position: int,
-                                 is_vertical: bool, dimension: int) -> float:
-        """
-        Calculate variance along a line.
-        
-        Returns:
-            Variance value (lower = more uniform = more likely a divider)
-        """
-        start = int(dimension * 0.1)
-        end = int(dimension * 0.9)
-        
-        values = []
-        for i in range(start, end, 2):
-            if is_vertical:
-                values.append(int(gray[i, position]))
-            else:
-                values.append(int(gray[position, i]))
-        
-        if len(values) < 2:
-            return float('inf')
-        
-        return float(np.var(values))
-
     def detect_layout(self, frame: np.ndarray) -> str:
-        """
-        Wrapper for enhanced layout detection (maintains API compatibility).
-        """
-        layout, debug_info = self.detect_layout_enhanced(frame)
+        """Wrapper for Canny-based layout detection."""
+        layout, debug_info = self.detect_layout_canny(frame)
         
         if self.debug and self.frame_count % 100 == 0:
             print(f"\n[Frame {self.frame_count}] Layout: {layout}")
-            for key, val in debug_info.items():
-                print(f"  {key}: {val:.3f}")
+            print(f"  V-edge density: {debug_info['vertical_edge_density']:.3f} (count: {debug_info['vertical_edge_count']})")
+            print(f"  H-edge density: {debug_info['horizontal_edge_density']:.3f} (count: {debug_info['horizontal_edge_count']})")
+            print(f"  Has V-divider: {debug_info['has_vertical_divider']}")
+            print(f"  Has H-divider: {debug_info['has_horizontal_divider']}")
         
         return layout
 
     def is_quadrant_active(self, frame: np.ndarray, x: int, y: int, w: int, h: int) -> bool:
         """
-        Check if a quadrant has active video content.
+        Check if a quadrant has active video content using histogram analysis.
 
-        A quadrant is considered active if it has reasonable brightness
-        OR sufficient edge density (content variation).
+        Active video content typically has:
+        - Wider distribution of brightness values (high std deviation)
+        - Multiple peaks in histogram (varied content)
+        - Less concentration in black/dark ranges
+
+        Inactive/black screens have:
+        - Most pixels clustered in low values (0-30)
+        - Very low standard deviation
+        - Single dominant peak near zero
         """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        height, width = gray.shape
+        # Extract the quadrant region (keep color for better analysis)
+        height, width = frame.shape[:2]
 
-        total_brightness = 0
-        edge_count = 0
-        sample_count = 0
+        # Ensure we stay within bounds
+        x_end = min(x + w, width)
+        y_end = min(y + h, height)
 
-        # Sample points every 10 pixels for speed
-        for py in range(y, min(y + h, height), 10):
-            for px in range(x, min(x + w, width), 10):
-                brightness = int(gray[py, px])
-                total_brightness += brightness
-
-                # Check for edges (content variation)
-                if px < min(x + w - 1, width - 1) and py < min(y + h - 1, height - 1):
-                    brightness2 = int(gray[py, px + 1])
-                    if abs(brightness - brightness2) > self.EDGE_CONTENT_THRESHOLD:
-                        edge_count += 1
-
-                sample_count += 1
-
-        if sample_count == 0:
+        if x >= x_end or y >= y_end:
             return False
 
-        avg_brightness = total_brightness / sample_count
-        edge_density = edge_count / sample_count
+        # Extract quadrant region in color and grayscale
+        region_color = frame[y:y_end, x:x_end]
+        region_gray = cv2.cvtColor(region_color, cv2.COLOR_BGR2GRAY)
 
-        # Active if: reasonable brightness OR has content variation
-        return avg_brightness > self.BRIGHTNESS_THRESHOLD or edge_density > self.EDGE_THRESHOLD
+        if region_gray.size == 0:
+            return False
+
+        # Strategy 1: Histogram Analysis
+        # Calculate histogram (256 bins for grayscale values 0-255)
+        hist = cv2.calcHist([region_gray], [0], None, [256], [0, 256])
+        hist = hist.flatten() / region_gray.size  # Normalize to get probability
+
+        # Calculate histogram metrics
+        # 1. How much content is in the "black" range (0-30)
+        black_ratio = np.sum(hist[:30])
+
+        # 2. Standard deviation of pixel values (spread of brightness)
+        std_dev = np.std(region_gray)
+
+        # 3. Histogram entropy (measure of randomness/variety)
+        # Remove zeros to avoid log(0)
+        hist_nonzero = hist[hist > 0]
+        entropy = -np.sum(hist_nonzero * np.log2(hist_nonzero)) if len(hist_nonzero) > 0 else 0
+
+        # 4. Color variety check (for color frame)
+        # Calculate standard deviation across color channels
+        color_std = np.mean([np.std(region_color[:,:,i]) for i in range(3)])
+
+        # 5. Number of significant peaks in histogram
+        # Smooth histogram and find peaks
+        from scipy.ndimage import gaussian_filter1d
+        hist_smooth = gaussian_filter1d(hist, sigma=2)
+        # Count bins with >1% of pixels
+        significant_bins = np.sum(hist_smooth > 0.01)
+
+        # Decision logic with multiple criteria
+        is_active = False
+        reasons = []
+
+        # Check 1: Not mostly black
+        if black_ratio < 0.8:  # Less than 80% black pixels
+            reasons.append("not_black")
+            is_active = True
+
+        # Check 2: Has brightness variation
+        if std_dev > 15:  # Significant brightness variation
+            reasons.append("high_std")
+            is_active = True
+
+        # Check 3: Has color variation
+        if color_std > 10:  # Significant color variation
+            reasons.append("color_variety")
+            is_active = True
+
+        # Check 4: Histogram entropy (variety of values)
+        if entropy > 4.0:  # High entropy = diverse content
+            reasons.append("high_entropy")
+            is_active = True
+
+        # Check 5: Multiple brightness levels used
+        if significant_bins > 10:  # Uses many different brightness levels
+            reasons.append("multiple_peaks")
+            is_active = True
+
+        # Fallback: Check average brightness (original method)
+        avg_brightness = np.mean(region_gray)
+        if not is_active and avg_brightness > BRIGHTNESS_THRESHOLD:
+            reasons.append("bright")
+            is_active = True
+
+        # Edge detection as final check (original method)
+        if not is_active:
+            edges = cv2.Canny(region_gray, 50, 150)
+            edge_density = np.sum(edges > 0) / edges.size
+            if edge_density > EDGE_THRESHOLD:
+                reasons.append("edges")
+                is_active = True
+
+        if self.debug and self.frame_count % 500 == 0:
+            print(f"    Quadrant ({x},{y},{w}x{h}):")
+            print(f"      Black ratio: {black_ratio:.2f}, Std: {std_dev:.1f}, Entropy: {entropy:.2f}")
+            print(f"      Color std: {color_std:.1f}, Significant bins: {significant_bins}")
+            print(f"      Active: {is_active} ({', '.join(reasons)})")
+
+        return is_active
 
     def get_state_fingerprint(self, frame: np.ndarray) -> StateFingerprint:
-        """
-        Generate a state fingerprint for the current frame.
-        """
+        """Generate a state fingerprint for the current frame."""
         height, width = frame.shape[:2]
         layout = self.detect_layout(frame)
 
@@ -353,9 +347,7 @@ class ScreenStateDetector:
         )
 
     def process_frame(self, frame: np.ndarray, timestamp: float) -> Optional[StateChange]:
-        """
-        Process a single frame and detect state changes.
-        """
+        """Process a single frame and detect state changes."""
         state = self.get_state_fingerprint(frame)
         self.current_state = state
 
@@ -368,7 +360,7 @@ class ScreenStateDetector:
                 self.stable_frames += 1
 
                 # If stable for enough frames, register the change
-                if self.stable_frames >= self.STABILITY_THRESHOLD:
+                if self.stable_frames >= STABILITY_THRESHOLD:
                     change_detected = StateChange(
                         time=timestamp,
                         frame_number=self.frame_count,
@@ -394,14 +386,13 @@ class ScreenStateDetector:
         return change_detected
 
     def process_video(self, show_preview: bool = False, save_output: bool = True) -> List[StateChange]:
-        """
-        Process the entire video and detect all state changes.
-        """
+        """Process the entire video and detect all state changes."""
         print(f"Processing video: {self.video_path}")
         print(f"Total frames: {self.total_frames}")
         print(f"FPS: {self.fps:.2f} ({self.fps_source})")
         print(f"Duration: {self.duration:.2f}s ({self._format_time(self.duration)})")
-        print(f"Stability threshold: {self.STABILITY_THRESHOLD} frames")
+        print(f"Stability threshold: {STABILITY_THRESHOLD} frames (immediate detection)")
+        print(f"Detection method: Canny edge detection")
         print(f"Debug mode: {'ON' if self.debug else 'OFF'}")
         print("-" * 60)
 
@@ -421,7 +412,7 @@ class ScreenStateDetector:
             # Show preview if requested
             if show_preview:
                 self._draw_state_overlay(frame)
-                cv2.imshow('Screen State Detector', frame)
+                cv2.imshow('Screen State Detector (Canny)', frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
@@ -486,7 +477,7 @@ class ScreenStateDetector:
     def _save_results(self):
         """Save detection results to JSON file."""
         video_name = Path(self.video_path).stem
-        output_path = Path(self.video_path).parent / f"{video_name}_screen_changes_improved.json"
+        output_path = Path(self.video_path).parent / f"{video_name}_screen_changes_canny.json"
 
         results = {
             'video_path': self.video_path,
@@ -494,11 +485,13 @@ class ScreenStateDetector:
             'fps': self.fps,
             'fps_source': self.fps_source,
             'total_frames': self.total_frames,
+            'detection_method': 'canny_edge_detection',
             'changes_detected': len(self.changes),
             'detection_params': {
-                'stability_threshold': self.STABILITY_THRESHOLD,
-                'edge_diff_threshold': self.EDGE_DIFF_THRESHOLD,
-                'grid_edge_ratio_threshold': self.GRID_EDGE_RATIO_THRESHOLD,
+                'stability_threshold': STABILITY_THRESHOLD,
+                'canny_low': CANNY_LOW_THRESHOLD,
+                'canny_high': CANNY_HIGH_THRESHOLD,
+                'edge_density_threshold': EDGE_DENSITY_THRESHOLD,
             },
             'changes': [change.to_dict() for change in self.changes]
         }
@@ -512,7 +505,7 @@ class ScreenStateDetector:
 def main():
     """Command-line interface for the screen state detector."""
     parser = argparse.ArgumentParser(
-        description='Detect layout and state changes in multicam videos (IMPROVED)',
+        description='Detect layout and state changes using Canny edge detection',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Duration format examples:
