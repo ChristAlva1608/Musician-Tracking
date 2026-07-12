@@ -4,6 +4,7 @@ import axios from 'axios';
 import {
   SingleVideoRequest,
   FolderProcessingRequest,
+  VideoUploadRequest,
   ProcessingJob,
   ModelOptions,
   Configuration,
@@ -13,7 +14,7 @@ import {
   AlignmentData
 } from '../types';
 
-const API_BASE_URL = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000';
+export const API_BASE_URL = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000';
 
 const apiClient = axios.create({
   baseURL: `${API_BASE_URL}/api`,
@@ -74,6 +75,34 @@ export const processingApi = {
   // Get available models
   getModels: async (): Promise<ModelOptions> => {
     const response = await apiClient.get('/processing/models');
+    return response.data;
+  },
+
+  // Upload and process video
+  uploadVideo: async (request: VideoUploadRequest): Promise<ProcessingJob> => {
+    const formData = new FormData();
+    formData.append('file', request.file);
+    formData.append('hand_model', request.hand_model);
+    formData.append('pose_model', request.pose_model);
+    formData.append('facemesh_model', request.facemesh_model);
+    formData.append('emotion_model', request.emotion_model);
+    formData.append('transcript_model', request.transcript_model);
+    formData.append('num_poses', request.num_poses.toString());
+    formData.append('num_hands', request.num_hands.toString());
+    formData.append('num_faces', request.num_faces.toString());
+    if (request.target_person !== null) {
+      formData.append('target_person', request.target_person.toString());
+    }
+    formData.append('skip_frames', request.skip_frames.toString());
+    formData.append('save_output_video', request.save_output_video.toString());
+    formData.append('display_output', request.display_output.toString());
+
+    const response = await apiClient.post('/processing/upload-video', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 60000, // 60 second timeout for uploads
+    });
     return response.data;
   },
 };

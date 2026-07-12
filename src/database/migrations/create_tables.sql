@@ -6,11 +6,12 @@
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS musician_frame_analysis (
     id BIGSERIAL PRIMARY KEY,
-    
+
     -- Session metadata
     session_id VARCHAR(50) NOT NULL,
     video_file VARCHAR(255),
     frame_number INTEGER NOT NULL,
+    person_id INTEGER NOT NULL DEFAULT 0,  -- Person identifier in multi-person videos (0=left, 1=right, etc.)
     original_time DECIMAL(10,3),  -- Original time in video (seconds)
     synced_time DECIMAL(10,3),    -- Synced time after alignment (seconds)
     fps REAL,
@@ -59,6 +60,8 @@ CREATE TABLE IF NOT EXISTS musician_frame_analysis (
 CREATE INDEX IF NOT EXISTS idx_session_frame ON musician_frame_analysis(session_id, frame_number);
 CREATE INDEX IF NOT EXISTS idx_session_time ON musician_frame_analysis(session_id, synced_time);
 CREATE INDEX IF NOT EXISTS idx_synced_time ON musician_frame_analysis(synced_time);
+CREATE INDEX IF NOT EXISTS idx_person_id ON musician_frame_analysis(person_id);
+CREATE INDEX IF NOT EXISTS idx_session_person ON musician_frame_analysis(session_id, person_id, frame_number);
 CREATE INDEX IF NOT EXISTS idx_bad_gestures ON musician_frame_analysis(flag_low_wrists, flag_turtle_neck, flag_hunched_back, flag_fingers_pointing_up);
 CREATE INDEX IF NOT EXISTS idx_created_at ON musician_frame_analysis(created_at);
 CREATE INDEX IF NOT EXISTS idx_models ON musician_frame_analysis(hand_model, pose_model, emotion_model);
@@ -85,7 +88,8 @@ CREATE INDEX IF NOT EXISTS idx_reference_video ON video_alignment_offsets(refere
 -- =====================================================================
 
 -- Add new columns to existing musician_frame_analysis table
-ALTER TABLE musician_frame_analysis 
+ALTER TABLE musician_frame_analysis
+ADD COLUMN IF NOT EXISTS person_id INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN IF NOT EXISTS original_time DECIMAL(10,3),
 ADD COLUMN IF NOT EXISTS synced_time DECIMAL(10,3),
 ADD COLUMN IF NOT EXISTS hand_model VARCHAR(50),

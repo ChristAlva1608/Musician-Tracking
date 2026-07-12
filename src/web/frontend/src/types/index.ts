@@ -12,7 +12,7 @@ export interface VideoFile {
 
 export interface ProcessingJob {
   job_id: string; // Primary key - unique job identifier
-  type: 'single_video' | 'folder_processing';
+  type: 'single_video' | 'folder_processing' | 'upload_video';
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   message: string;
@@ -44,6 +44,26 @@ export interface SingleVideoRequest {
   facemesh_model: string;
   emotion_model: string;
   transcript_model: string;
+  save_output_video: boolean;
+  display_output: boolean;
+  num_poses?: number;
+  num_hands?: number;
+  num_faces?: number;
+  target_person?: number | null;
+}
+
+export interface VideoUploadRequest {
+  file: File;
+  hand_model: string;
+  pose_model: string;
+  facemesh_model: string;
+  emotion_model: string;
+  transcript_model: string;
+  num_poses: number;
+  num_hands: number;
+  num_faces: number;
+  target_person: number | null;
+  skip_frames: number;
   save_output_video: boolean;
   display_output: boolean;
 }

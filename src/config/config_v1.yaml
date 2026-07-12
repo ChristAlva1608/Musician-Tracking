@@ -4,8 +4,9 @@ bad_gestures:
   detect_low_wrists: true
   detect_turtle_neck: true
   thresholds:
-    finger_pointing_threshold: 0.8
-    hunched_back_angle: 20
+    finger_vertical_angle: 45  # Angle from vertical in degrees (pinky detection)
+    spine_vertical_angle: 20  # Spine tilt from vertical (hunched back method 1)
+    upper_lower_spine_angle: 160  # Upper/lower spine angle (hunched back method 2)
     low_wrist_threshold: 0.1
     turtle_neck_angle: 30
 database:
@@ -24,7 +25,7 @@ database:
   # Supabase Configuration
   supabase:
     url: 'https://zjrpvldbweqilzqxwfpi.supabase.co'
-    anon_key:
+    anon_key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqcnB2bGRid2VxaWx6cXh3ZnBpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ2NjgzNjIsImV4cCI6MjA3MDI0NDM2Mn0.qDw7MxugzaWllJsAZUytCHvLIRCvn2gTtR06gLmoiDk'
   # Local PostgreSQL Configuration
   local:
     host: localhost
@@ -33,22 +34,12 @@ database:
     user: ngothanhnhan
     password: ''
 detection:
+  # Multi-person detection settings (MediaPipe tasks API)
+  num_poses: 2       # Maximum number of people for pose detection (default: 2)
+  num_hands: 4       # Maximum number of hands to detect (default: 4, supports 2 people)
+  num_faces: 2       # Maximum number of faces to detect (default: 2)
+
   use_two_stage_hand: false  # Use two-stage hand detection for higher accuracy
-  emotion_model: none
-  emotion_settings:
-    deepface:
-      detector_backend: retinaface
-      enforce_detection: false
-      model_name: Facenet
-    fer:
-      min_face_size: 40
-      use_mtcnn: true
-    ghostfacenet:
-      batch_size: 32
-      model_version: v2
-    mediapipe:
-      min_detection_confidence: 0.5
-      min_tracking_confidence: 0.5
   face_confidence: 0.5
   facemesh_confidence: 0.5
   facemesh_model: yolo+mediapipe
@@ -78,8 +69,7 @@ heatmap:
   update_interval: 5
 integrated_processor:
   aligned_videos_dir: src/output/aligned_videos
-  alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician Tracking/src/video/multi-cam
-    video/vid_shot1/chunk_video
+  alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician-Tracking/src/video/multi-cam video/vid_shot1/original_video
   check_existing_alignment: true
   create_aligned_videos: true
   detection_output_format: mp4
@@ -87,17 +77,17 @@ integrated_processor:
   detector_config:
     database:
       enabled: true
-    display_output: false
+    display_output: false  # Show visualization window during processing
     video:
       generate_report: true
       preserve_audio: true
       process_matching_duration_only: true
       save_output_video: true
       use_webcam: false
-  limit_processing_duration: false
-  max_processing_duration: 10
+  limit_processing_duration: false  # Set to false to process entire videos without time limit
+  max_processing_duration: 10  # Only used if limit_processing_duration is true
   preserve_original_audio: true
-  processing_type: full_frames
+  processing_type: full_frames  # Options: 'use_offset' (skip to sync point), 'full_frames' (process entire video)
   run_detection: true
   unified_video_config:
     add_camera_labels: true
@@ -112,7 +102,7 @@ integrated_processor:
     - 255
     label_font_scale: 1
     output_filename: unified_detection_output.mp4
-    stack_direction: vertical
+    stack_direction: vertical  # Options: 'vertical' (stack top-to-bottom), 'horizontal' (stack left-to-right)
   unified_videos: true
   unified_videos_dir: src/output/unified_videos
 logging:
@@ -133,18 +123,20 @@ video:
   report_path: src/analysis/detection_report.txt
   save_output_video: true
   skip_frames: 0
-  source_path: /Volumes/Extreme_Pro/Mitou Project/Musician Tracking/src/video/multi-cam
-    video/vid_shot1/original_video/cam_1.mp4
+  source_path: /Volumes/Extreme_Pro/Mitou Project/Musician-Tracking/src/video/multi-cam video/vid_shot1/original_video/cam_1.mp4
   temp_video_path: src/output/temp_video_no_audio.mp4
   use_webcam: false
 video_aligner:
   alignment:
     correlation_threshold: 0.3
-    enable_chunk_processing: true
+    enable_chunk_processing: true  # Options: true (multi-chunk videos like cam_1_1.mp4, cam_1_2.mp4), false (single files like cam_1.mp4)
     max_offset_search: 60
-    reference_strategy: earliest_start
-  alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician Tracking/src/video/multi-cam
-    video/vid_shot1/original_video
+    # reference_strategy is now auto-determined by processing_type:
+    #   - processing_type: full_frames → earliest_start (all content)
+    #   - processing_type: use_offset → latest_start (synchronized only)
+    #   - unified_videos: true → earliest_start (full timeline needed)
+    # reference_strategy: earliest_start  # DEPRECATED: auto-paired with processing_type
+  alignment_directory: /Volumes/Extreme_Pro/Mitou Project/Musician-Tracking/src/video/multi-cam video/vid_shot1/original_video
   audio:
     extraction_duration: 120
     sample_rate: 22050

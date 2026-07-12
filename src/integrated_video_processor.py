@@ -123,7 +123,11 @@ class IntegratedVideoProcessor:
             self.chunk_alignment_db = ChunkVideoAlignmentDatabase()
             print("✅ Connected to alignment databases")
         except Exception as e:
-            print(f"❌ Database connection failed: {e}")
+            error_msg = f"❌ Database connection failed: {e}\n"
+            error_msg += "   Please check your database configuration and connection settings.\n"
+            error_msg += "   Ensure PostgreSQL/Supabase is running and credentials are correct."
+            print(error_msg)
+            raise RuntimeError(f"Failed to initialize databases: {e}") from e
 
         # Store alignment results
         self.alignment_results = {}
@@ -677,7 +681,20 @@ class IntegratedVideoProcessor:
                 with self._timer(f"Detection for {camera_prefix}"):
                     try:
                         # Create a new detector instance for this video
-                        detector = DetectorV2(config_path='src/config/config_v1.yaml')
+                        print(f"🔧 Initializing detector for {camera_prefix}...")
+                        try:
+                            detector = DetectorV2(config_path='src/config/config_v1.yaml')
+                        except ImportError as ie:
+                            error_msg = f"❌ Missing required modules for detection: {ie}\n"
+                            error_msg += "   Please install required packages:\n"
+                            error_msg += "   pip install mediapipe ultralytics torch opencv-python\n"
+                            print(error_msg)
+                            raise RuntimeError(f"Detector initialization failed due to missing dependencies: {ie}") from ie
+                        except Exception as e:
+                            error_msg = f"❌ Failed to initialize detector: {e}\n"
+                            error_msg += "   Check that all model files and dependencies are available.\n"
+                            print(error_msg)
+                            raise RuntimeError(f"Detector initialization failed: {e}") from e
 
                         # Apply configuration overrides from integrated_processor.detector_config
                         detector_overrides = self.integrated_config.get('detector_config', {})
@@ -788,7 +805,34 @@ class IntegratedVideoProcessor:
                         print(f"   📄 Generate report: {detector.config['video']['generate_report']}")
 
                         # Run detection with full workflow
-                        detector.process_video(video_path)
+                        try:
+                            print(f"🎬 Starting video processing...")
+                            detector.process_video(video_path)
+                        except ImportError as ie:
+                            error_msg = f"❌ Detection module missing: {ie}\n"
+                            if 'whisper' in str(ie).lower():
+                                error_msg += "   Transcript model (whisper) not available.\n"
+                                error_msg += "   Install with: pip install openai-whisper\n"
+                            elif 'mediapipe' in str(ie).lower():
+                                error_msg += "   MediaPipe not available for face/pose detection.\n"
+                                error_msg += "   Install with: pip install mediapipe\n"
+                            print(error_msg)
+                            raise RuntimeError(f"Detection processing failed due to missing module: {ie}") from ie
+                        except AttributeError as ae:
+                            if 'face' in str(ae).lower():
+                                error_msg = f"❌ Face detection failed: {ae}\n"
+                                error_msg += "   This may indicate no faces were detected in the video.\n"
+                                error_msg += "   Check that face detection models are properly configured.\n"
+                                print(error_msg)
+                                raise RuntimeError(f"Face detection error: {ae}") from ae
+                            raise
+                        except RuntimeError as re:
+                            if 'database' in str(re).lower():
+                                error_msg = f"❌ Database operation failed during detection: {re}\n"
+                                error_msg += "   Check database connection and credentials.\n"
+                                print(error_msg)
+                                raise
+                            raise
 
                         # Cleanup detector
                         detector.cleanup()
@@ -803,10 +847,14 @@ class IntegratedVideoProcessor:
                         # Track detection output for unified video creation
                         self.detection_output_videos[camera_prefix] = detection_output_path
 
+                    except RuntimeError:
+                        # Re-raise RuntimeErrors (they're already properly formatted)
+                        raise
                     except Exception as e:
                         print(f"❌ Detection failed for {camera_prefix}: {e}")
                         import traceback
                         traceback.print_exc()
+                        raise RuntimeError(f"Unexpected error during detection for {camera_prefix}: {e}") from e
 
             print(f"\n✅ Detection processing complete: {success_count}/{total_videos} videos processed successfully")
             return success_count > 0
@@ -1319,6 +1367,60 @@ class IntegratedVideoProcessor:
 
         print("✅ Cleanup complete")
 
+    def _validate_processing_requirements(self):
+        """
+        Validate that all required components are available before processing
+
+        Raises:
+            RuntimeError: If critical requirements are not met
+        """
+        print("\n🔍 Validating processing requirements...")
+
+        # Check database connections
+        if not self.alignment_db and not self.chunk_alignment_db:
+            raise RuntimeError(
+                "No database connections available. "
+                "At least one database must be connected for alignment tracking."
+            )
+
+        # Check if detection is enabled and validate detector dependencies
+        if self.run_detection:
+            print("   🔍 Checking detector dependencies...")
+            try:
+                # Try importing critical detection modules
+                import mediapipe
+                print("      ✅ MediaPipe available")
+            except ImportError as e:
+                raise RuntimeError(
+                    f"Detection enabled but MediaPipe not available: {e}\n"
+                    f"Install with: pip install mediapipe"
+                ) from e
+
+            try:
+                import ultralytics
+                print("      ✅ Ultralytics (YOLO) available")
+            except ImportError as e:
+                raise RuntimeError(
+                    f"Detection enabled but Ultralytics not available: {e}\n"
+                    f"Install with: pip install ultralytics"
+                ) from e
+
+            # Check optional but commonly used modules
+            try:
+                import whisper
+                print("      ✅ Whisper (transcript) available")
+            except ImportError:
+                print("      ⚠️  Whisper not available - transcript features will be disabled")
+
+        # Check alignment directory exists
+        if not os.path.exists(self.alignment_directory):
+            raise RuntimeError(
+                f"Alignment directory does not exist: {self.alignment_directory}\n"
+                f"Please check the path in your configuration."
+            )
+
+        print("✅ All critical requirements validated\n")
+
     def process(self) -> bool:
         """
         Main processing workflow
@@ -1333,6 +1435,8 @@ class IntegratedVideoProcessor:
         print(f"Processing directory: {self.alignment_directory}")
 
         try:
+            # Validate requirements before starting
+            self._validate_processing_requirements()
             # Step 1: Check for existing alignment data
             has_existing_data = self.check_existing_alignment_data()
 

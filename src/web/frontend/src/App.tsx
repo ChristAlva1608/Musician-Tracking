@@ -4,6 +4,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { CssBaseline, Box } from '@mui/material';
 import { Navigation } from './components/Navigation';
 import { HomePage } from './pages/HomePage';
+import { VideoUploadPage } from './pages/VideoUploadPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ProcessingPage } from './pages/ProcessingPage';
 import { ResultsPage } from './pages/ResultsPage';
@@ -45,6 +46,7 @@ function App() {
             <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
               <Routes>
                 <Route path="/" element={<HomePage />} />
+                <Route path="/upload" element={<VideoUploadPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/processing" element={<ProcessingPage />} />
                 <Route path="/results" element={<ResultsPage />} />

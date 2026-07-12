@@ -2,7 +2,7 @@
 Processing endpoints for video analysis
 """
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import os
@@ -10,6 +10,7 @@ import sys
 import asyncio
 import uuid
 from datetime import datetime, timedelta
+import shutil
 
 # Add project src directory to path
 # From routers/processing.py -> routers -> backend -> web -> src
@@ -37,6 +38,10 @@ class SingleVideoRequest(BaseModel):
     transcript_model: str = "whisper"
     save_output_video: bool = True
     display_output: bool = False
+    num_poses: int = 2  # Number of people to detect (1 or 2)
+    num_hands: int = 4  # Number of hands to detect
+    num_faces: int = 2  # Number of faces to detect
+    target_person: Optional[int] = None  # Specific person to track (0=left, 1=right, None=all)
 
 class FolderProcessingRequest(BaseModel):
     folder_path: str
@@ -187,7 +192,11 @@ def run_single_video_detection(job_id: str, request: SingleVideoRequest):
                 "pose_model": request.pose_model,
                 "facemesh_model": request.facemesh_model,
                 "emotion_model": request.emotion_model,
-                "transcript_model": request.transcript_model
+                "transcript_model": request.transcript_model,
+                "num_poses": request.num_poses,
+                "num_hands": request.num_hands,
+                "num_faces": request.num_faces,
+                "target_person": request.target_person
             },
             "database": current_config.get('database', {})  # Use actual database config
         }
@@ -537,3 +546,67 @@ async def get_job_statistics():
         stats["by_type"][job_type] = stats["by_type"].get(job_type, 0) + 1
 
     return stats
+
+@router.post("/upload-video", response_model=JobResponse)
+async def upload_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    hand_model: str = Form("mediapipe"),
+    pose_model: str = Form("mediapipe"),
+    facemesh_model: str = Form("yolo+mediapipe"),
+    emotion_model: str = Form("none"),
+    transcript_model: str = Form("none"),
+    num_poses: int = Form(2),
+    num_hands: int = Form(4),
+    num_faces: int = Form(2),
+    target_person: Optional[int] = Form(None),
+    skip_frames: int = Form(0),
+    save_output_video: bool = Form(True),
+    display_output: bool = Form(False)
+):
+    """
+    Upload and process a video file with person selection
+
+    Parameters:
+    - file: Video file to upload
+    - num_poses: Number of people to detect (1 or 2)
+    - target_person: Specific person to track (0=left, 1=right, None=all)
+    """
+    try:
+        # Create uploads directory if it doesn't exist
+        uploads_dir = os.path.join(src_root, 'output', 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        # Save uploaded file
+        file_path = os.path.join(uploads_dir, file.filename)
+        with open(file_path, 'wb') as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Create processing request
+        request = SingleVideoRequest(
+            video_path=file_path,
+            skip_frames=skip_frames,
+            hand_model=hand_model,
+            pose_model=pose_model,
+            facemesh_model=facemesh_model,
+            emotion_model=emotion_model,
+            transcript_model=transcript_model,
+            save_output_video=save_output_video,
+            display_output=display_output,
+            num_poses=num_poses,
+            num_hands=num_hands,
+            num_faces=num_faces,
+            target_person=target_person
+        )
+
+        job_id = create_job("upload_video", request.dict())
+        background_tasks.add_task(run_single_video_detection, job_id, request)
+
+        return JobResponse(
+            job_id=job_id,
+            status="queued",
+            message=f"Video '{file.filename}' uploaded and queued for processing",
+            created_at=active_jobs[job_id]["created_at"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
