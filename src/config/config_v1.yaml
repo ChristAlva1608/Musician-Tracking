@@ -30,7 +30,7 @@ database:
     host: localhost
     port: 5432
     name: musician-tracking
-    user: christalva
+    user: ngothanhnhan
     password: ''
 detection:
   use_two_stage_hand: false  # Use two-stage hand detection for higher accuracy
@@ -54,8 +54,14 @@ detection:
   facemesh_model: yolo+mediapipe
   hand_confidence: 0.5
   hand_model: mediapipe
-  pose_confidence: 0.5
-  pose_model: mediapipe
+  pose_confidence: 0.4
+  pose_model: yolo_tiled  # tiled multi-person YOLO (was: mediapipe, single person)
+  tiled:
+    pose_model_path:      # empty = auto: yolo26x-pose if available, else yolo11x-pose
+    tile_target: 1200     # target tile size in px (4000x2000 equirect -> 3x2 tiles)
+    overlap: 0.25         # tile overlap fraction; person on a boundary is whole in >=1 tile
+    wrap_360: true        # extra seam tiles so people straddling the 360 seam are kept
+    max_people: 2         # keep the 2 largest people (0 = keep everyone)
   transcript_model: whisper
   transcript_settings:
     chunk_duration: 15

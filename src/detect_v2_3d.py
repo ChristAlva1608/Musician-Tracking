@@ -25,6 +25,7 @@ from src.models.hand.yolo import YOLOHandDetector
 
 from src.models.pose.mediapipe import MediaPipePoseDetector
 from src.models.pose.yolo import YOLOPoseDetector
+from src.models.pose.yolo_tiled import YOLOTiledPoseDetector
 
 from src.models.facemesh.mediapipe import MediaPipeFaceMeshDetector
 from src.models.face.yolo import YOLOFaceDetector
@@ -195,6 +196,16 @@ class DetectorV2:
             return MediaPipePoseDetector(min_detection_confidence=confidence)
         elif model_type == 'yolo':
             return YOLOPoseDetector(confidence=confidence)
+        elif model_type == 'yolo_tiled':
+            tiled = self.config['detection'].get('tiled', {})
+            return YOLOTiledPoseDetector(
+                model_path=tiled.get('pose_model_path'),
+                confidence=confidence,
+                tile_target=tiled.get('tile_target', 1200),
+                overlap=tiled.get('overlap', 0.25),
+                wrap_360=tiled.get('wrap_360', True),
+                max_people=tiled.get('max_people', 0),
+            )
         else:
             return None
     
