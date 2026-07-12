@@ -142,30 +142,36 @@ class PersonIdentifier:
         dx = abs(xa - xb)
         return min(dx, self.w - dx)
 
+    def _same_person(self, pa, pb) -> bool:
+        """Same physical person = their SKELETONS coincide. Box overlap alone
+        is NOT enough — an occluded person's box can sit almost entirely
+        inside the other's (teacher behind student) while the joints differ."""
+        ka, kb = pa.get('keypoints'), pb.get('keypoints')
+        if ka and kb:
+            ka, kb = np.asarray(ka), np.asarray(kb)
+            shared = (ka[:, 2] > 0.3) & (kb[:, 2] > 0.3)
+            if shared.sum() >= 4:
+                d = np.linalg.norm(ka[shared, :2] - kb[shared, :2], axis=1)
+                ref = max(pa['bbox'][3] - pa['bbox'][1],
+                          pb['bbox'][3] - pb['bbox'][1], 1.0)
+                return float(np.median(d)) < 0.10 * ref
+        # no comparable skeletons: only near-identical boxes count
+        bd, bk = np.asarray(pa['bbox']), np.asarray(pb['bbox'])
+        x1, y1 = np.maximum(bd[:2], bk[:2])
+        x2, y2 = np.minimum(bd[2:], bk[2:])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        union = ((bd[2] - bd[0]) * (bd[3] - bd[1])
+                 + (bk[2] - bk[0]) * (bk[3] - bk[1]) - inter)
+        return union > 0 and inter / union >= 0.85
+
     def _dedup(self, people):
         """Suppress duplicate detections of the same physical person that
-        survived tile merging (partial box + full box). Keeps higher conf."""
+        survived tile merging. Keeps higher conf."""
         order = sorted(range(len(people)), key=lambda d: people[d]['conf'],
                        reverse=True)
         keep, dropped = [], set()
         for d in order:
-            bd = np.asarray(people[d]['bbox'])
-            dup = False
-            for k in keep:
-                bk = np.asarray(people[k]['bbox'])
-                # IoU or near-total containment of the smaller box
-                x1, y1 = np.maximum(bd[:2], bk[:2])
-                x2, y2 = np.minimum(bd[2:], bk[2:])
-                inter = max(0, x2 - x1) * max(0, y2 - y1)
-                area_d = (bd[2]-bd[0])*(bd[3]-bd[1])
-                area_k = (bk[2]-bk[0])*(bk[3]-bk[1])
-                union = area_d + area_k - inter
-                if union <= 0:
-                    continue
-                if inter/union >= self.dup_iou or inter >= 0.75*min(area_d, area_k):
-                    dup = True
-                    break
-            if dup:
+            if any(self._same_person(people[d], people[k]) for k in keep):
                 dropped.add(d)
             else:
                 keep.append(d)
@@ -190,9 +196,12 @@ class PersonIdentifier:
                     continue
                 gap = t - ident['last_t']
                 if 0 < gap <= 30:
-                    # velocity gate: reject teleports (reflections, TV, swaps)
-                    if self._wrap_dx(centers[d][0], ident['cx']) > self.max_speed * gap:
-                        continue
+                    speed = self._wrap_dx(centers[d][0], ident['cx']) / max(gap, 1e-6)
+                    if speed > 3 * self.max_speed:
+                        continue          # true teleport (TV/reflection/swap)
+                    # soft penalty: fast implied motion is suspicious but legal
+                    # (walking close to a 360 lens has huge angular speed)
+                    c += 0.15 * min(1.0, speed / self.max_speed)
                 if gap < 90:  # position only helps over short gaps
                     c += self.w_spatial * self._spatial(
                         centers[d][0], ident['cx'], centers[d][1], ident['cy'])
