@@ -77,8 +77,15 @@ def main():
     print(f"{len(frames)} frames ({args.camera}, step={args.step}) -> {out_dir}")
 
     detector = YOLOTiledPoseDetector(max_people=4)  # keep extras; gate rejects them
+    # canonical session size = majority declared size in filenames; a few
+    # stray frames exist only at half resolution and must be upscaled so
+    # every coordinate lives in ONE pixel space
+    declared = [m.groups() for _, f in frames
+                if (m := re.search(r'_(\d+)x(\d+)\.\w+$', f.name))]
+    cw, ch = (max(set(declared), key=declared.count) if declared else (None, None))
+    cw, ch = (int(cw), int(ch)) if cw else (None, None)
     first = cv2.imread(str(frames[0][1]))
-    identifier = PersonIdentifier(k=2, frame_width=first.shape[1])
+    identifier = PersonIdentifier(k=2, frame_width=cw or first.shape[1])
 
     timeline, tiles = [], []
     n_both = n_one = n_zero = 0
@@ -88,6 +95,8 @@ def main():
         frame = cv2.imread(str(path))
         if frame is None:
             continue
+        if cw and (frame.shape[1], frame.shape[0]) != (cw, ch):
+            frame = cv2.resize(frame, (cw, ch))
         people = detector.detect(frame) or []
         ids = identifier.assign(float(t), frame, people)
 

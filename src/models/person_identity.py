@@ -13,6 +13,8 @@ one person is missing is a detection miss, not an exit. Reflections
 (piano lid, screens) are rejected by the appearance gate + k=2 cap.
 """
 
+import itertools
+
 import numpy as np
 import cv2
 from typing import List, Dict, Any, Optional
@@ -57,12 +59,37 @@ class ClothingExtractor:
     def _ok(self, kp, idx) -> bool:
         return kp[idx][2] >= self.min_joint_conf
 
+    @staticmethod
+    def _ring_v(frame_bgr: np.ndarray, bbox, w: int) -> Optional[float]:
+        """Median brightness (0..1) of a band AROUND the bbox, wrap-aware.
+        A reflection sits embedded in dark glass (piano lid, TV) so its
+        surroundings are near-black; a real person — even in black clothes —
+        stands against floor/wall. Measured: reflection ring 0.20, real
+        people 0.55-0.77."""
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        bw, bh = x2 - x1, y2 - y1
+        if bw < 4 or bh < 4:
+            return None
+        mx, my = int(bw * 0.15) + 1, int(bh * 0.15) + 1
+        h = frame_bgr.shape[0]
+        oy1, oy2 = max(0, y1 - my), min(h, y2 + my)
+        xs = np.arange(x1 - mx, x2 + mx) % w
+        patch = frame_bgr[oy1:oy2][:, xs]
+        inner = np.zeros(patch.shape[:2], bool)
+        ix1, iy1 = x1 - (x1 - mx), y1 - oy1
+        inner[max(0, iy1):iy1 + bh, ix1:ix1 + bw] = True
+        ring = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)[~inner]
+        if len(ring) < 50:
+            return None
+        return float(np.median(ring[:, 2])) / 255.0
+
     def extract(self, frame_bgr: np.ndarray, person: Dict[str, Any]) -> Optional[Dict]:
         kp = person.get('keypoints')
         if not kp:
             return None
         kp = np.asarray(kp, dtype=np.float32)
         h, w = frame_bgr.shape[:2]
+        ring = self._ring_v(frame_bgr, person['bbox'], w)
 
         if person.get('crosses_seam'):
             # unwrap: shift so the person is contiguous, roll frame to match
@@ -98,7 +125,15 @@ class ClothingExtractor:
 
         if torso is None and thigh is None:
             return None
-        return {'torso': torso, 'thigh': thigh}
+        return {'torso': torso, 'thigh': thigh, 'ring': ring}
+
+
+def _brightness(feat: Dict) -> Optional[float]:
+    """Clothing brightness (v of the HSV cone, 0..1), torso preferred."""
+    for part in ('torso', 'thigh'):
+        if feat.get(part) is not None:
+            return float(feat[part][2])
+    return None
 
 
 def _feat_dist(a: Dict, b: Dict) -> Optional[float]:
@@ -151,7 +186,10 @@ class PersonIdentifier:
             ka, kb = np.asarray(ka), np.asarray(kb)
             shared = (ka[:, 2] > 0.3) & (kb[:, 2] > 0.3)
             if shared.sum() >= 4:
-                d = np.linalg.norm(ka[shared, :2] - kb[shared, :2], axis=1)
+                dx = np.abs(ka[shared, 0] - kb[shared, 0])
+                dx = np.minimum(dx, self.w - dx)      # seam wrap
+                dy = ka[shared, 1] - kb[shared, 1]
+                d = np.hypot(dx, dy)
                 ref = max(pa['bbox'][3] - pa['bbox'][1],
                           pb['bbox'][3] - pb['bbox'][1], 1.0)
                 return float(np.median(d)) < 0.10 * ref
@@ -166,9 +204,13 @@ class PersonIdentifier:
 
     def _dedup(self, people):
         """Suppress duplicate detections of the same physical person that
-        survived tile merging. Keeps higher conf."""
-        order = sorted(range(len(people)), key=lambda d: people[d]['conf'],
-                       reverse=True)
+        survived tile merging. Keeps the most COMPLETE skeleton (a truncated
+        partial box often has higher conf than the full-body one — keeping it
+        would lose the hips/thighs the clothing feature needs)."""
+        def richness(d):
+            p = people[d]
+            return (sum(1 for k in p['keypoints'] if k[2] > 0.3), p['conf'])
+        order = sorted(range(len(people)), key=richness, reverse=True)
         keep, dropped = [], set()
         for d in order:
             if any(self._same_person(people[d], people[k]) for k in keep):
@@ -180,11 +222,18 @@ class PersonIdentifier:
     def assign(self, t: float, frame_bgr: np.ndarray,
                people: List[Dict[str, Any]]) -> List[Optional[int]]:
         """Returns a person id (or None) per detection, and updates models."""
-        dropped = self._dedup(people)
-        feats = [None if d in dropped else self.extractor.extract(frame_bgr, p)
-                 for d, p in enumerate(people)]
+        feats = [self.extractor.extract(frame_bgr, p) for p in people]
+        # reflection filter: dark torso alone is NOT enough (a real person in
+        # a black top measures the same V=13 as a reflection) — but only a
+        # reflection is EMBEDDED in the dark glass that makes it, so its
+        # bbox surroundings are near-black too
+        for d, f in enumerate(feats):
+            if (f is not None and f.get('ring') is not None
+                    and (_brightness(f) or 1.0) < 0.25 and f['ring'] < 0.35):
+                feats[d] = None
         centers = [(0.5 * (p['bbox'][0] + p['bbox'][2]) % self.w,
                     0.5 * (p['bbox'][1] + p['bbox'][3])) for p in people]
+        heights = [max(1.0, p['bbox'][3] - p['bbox'][1]) for p in people]
 
         pairs = []  # (cost, det_idx, ident_idx)
         for d, feat in enumerate(feats):
@@ -195,41 +244,45 @@ class PersonIdentifier:
                 if c is None:
                     continue
                 gap = t - ident['last_t']
-                if 0 < gap <= 30:
-                    speed = self._wrap_dx(centers[d][0], ident['cx']) / max(gap, 1e-6)
-                    if speed > 3 * self.max_speed:
-                        continue          # true teleport (TV/reflection/swap)
-                    # soft penalty: fast implied motion is suspicious but legal
-                    # (walking close to a 360 lens has huge angular speed)
-                    c += 0.15 * min(1.0, speed / self.max_speed)
                 if gap < 90:  # position only helps over short gaps
                     c += self.w_spatial * self._spatial(
                         centers[d][0], ident['cx'], centers[d][1], ident['cy'])
+                if gap < 30 and ident.get('h'):
+                    # apparent height can't jump 2x+ in seconds — breaks the
+                    # tie when a seam-straddler's wrapped center lands next
+                    # to the other person and clothing colors are similar
+                    c += 0.12 * min(2.5, abs(np.log2(heights[d] / ident['h'])))
                 pairs.append((c, d, i))
 
-        pairs.sort()
-        ids: List[Optional[int]] = [None] * len(people)
-        used_d, used_i = set(), set()
+        # jointly optimal assignment over all identities (k is tiny, so
+        # brute force). Greedy per-pair matching swapped P1/P2 for single
+        # frames when the two people's clothing is similar — the SUM of
+        # costs is far more stable than the single lowest pair.
+        cand: List[Dict[int, float]] = [{} for _ in self.identities]
         for c, d, i in pairs:
-            if d in used_d or i in used_i or c > self.gate:
+            if c <= self.gate and (d not in cand[i] or c < cand[i][d]):
+                cand[i][d] = c
+        ids: List[Optional[int]] = [None] * len(people)
+        best, best_cost = None, None
+        options = [list(ci.items()) + [(None, self.gate)] for ci in cand]
+        for combo in itertools.product(*options):
+            ds = [d for d, _ in combo if d is not None]
+            if len(set(ds)) != len(ds):
                 continue
-            # never give the second identity to a box overlapping an
-            # already-assigned one (one physical person, two ids)
-            clash = False
-            for d2 in used_d:
-                b1, b2 = people[d]['bbox'], people[d2]['bbox']
-                x1, y1 = max(b1[0], b2[0]), max(b1[1], b2[1])
-                x2, y2 = min(b1[2], b2[2]), min(b1[3], b2[3])
-                inter = max(0, x2-x1) * max(0, y2-y1)
-                if inter > 0.5 * min((b1[2]-b1[0])*(b1[3]-b1[1]),
-                                     (b2[2]-b2[0])*(b2[3]-b2[1])):
-                    clash = True
-                    break
-            if clash:
+            # never give two identities to the SAME skeleton — but heavy box
+            # overlap alone is fine (occluded person behind the other)
+            if any(self._same_person(people[a], people[b])
+                   for x, a in enumerate(ds) for b in ds[x + 1:]):
                 continue
-            ids[d] = self.identities[i]['id']
-            used_d.add(d); used_i.add(i)
-            self._update(self.identities[i], feats[d], centers[d], t)
+            tot = sum(c for _, c in combo)
+            if best_cost is None or tot < best_cost:
+                best, best_cost = combo, tot
+        if best:
+            for i, (d, _) in enumerate(best):
+                if d is not None:
+                    ids[d] = self.identities[i]['id']
+                    self._update(self.identities[i], feats[d], centers[d],
+                                 heights[d], t)
 
         # new identities from confident unmatched detections (up to k);
         # size floor keeps TV/screen people from founding an identity
@@ -243,12 +296,12 @@ class PersonIdentifier:
                     and (people[d]['bbox'][3] - people[d]['bbox'][1]) >= 0.06 * h_img):
                 ident = {'id': len(self.identities) + 1, 'feat': feats[d],
                          'cx': centers[d][0], 'cy': centers[d][1],
-                         'last_t': t, 'n': 1}
+                         'h': heights[d], 'last_t': t, 'n': 1}
                 self.identities.append(ident)
                 ids[d] = ident['id']
         return ids
 
-    def _update(self, ident, feat, center, t):
+    def _update(self, ident, feat, center, height, t):
         for part in ('torso', 'thigh'):
             if feat.get(part) is not None:
                 if ident['feat'].get(part) is None:
@@ -257,6 +310,7 @@ class PersonIdentifier:
                     ident['feat'][part] = ((1 - self.ema) * ident['feat'][part]
                                            + self.ema * feat[part])
         ident['cx'], ident['cy'] = center
+        ident['h'] = height
         ident['last_t'] = t
         ident['n'] += 1
 
