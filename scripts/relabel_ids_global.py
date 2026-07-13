@@ -143,6 +143,28 @@ def main():
         if changed == 0 and it > 0:
             break
 
+    # boundary refinement: Viterbi finds the right number of swap segments
+    # but can place a cut a frame or two off (creates a visible 1-frame
+    # P1/P2 flicker at the boundary) — slide each cut to the local exact
+    # minimum-cost position, judged by per-row costs alone
+    idxs = np.flatnonzero(np.diff(flip.astype(int))) + 1
+    for i0 in idxs:
+        lo, hi = max(1, i0 - 8), min(len(rows) - 1, i0 + 8)
+        left_state, right_state = flip[lo - 1], flip[hi]
+        if left_state == right_state:
+            continue
+        best_c, best_cut = None, i0
+        for cut in range(lo, hi + 1):
+            c = sum((flip_c[j] if (left_state if j < cut else right_state) else keep_c[j])
+                    for j in range(lo, hi + 1))
+            if best_c is None or c < best_c:
+                best_c, best_cut = c, cut
+        if best_cut != i0:
+            print(f'  boundary moved: row {i0} (t={rows[i0][1]}) -> '
+                  f'row {best_cut} (t={rows[best_cut][1]})')
+        flip[lo:hi + 1] = np.where(np.arange(lo, hi + 1) < best_cut,
+                                   left_state, right_state)
+
     # 4. rewrite — every timeline entry takes the flip state of the nearest
     # feature row in time (entries whose feature extraction failed still
     # carry ids and must flip with their segment)

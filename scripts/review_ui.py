@@ -218,17 +218,26 @@ async function show(){
   if(entry) for(const p of entry.people){
     const col=P[p.id]||'#888';
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=3;
-    const kp=p.keypoints;
     const [x1,y1,x2,y2]=p.bbox;
-    ctx.strokeRect(x1*sc,y1*sc,(x2-x1)*sc,(y2-y1)*sc);
+    // seam-crossers: bbox x2 > 4000, keypoints folded into [0,4000).
+    // Unwrap joints into one contiguous span, then draw everything TWICE
+    // (offset 0 and -4000) so both halves at the frame edges line up.
+    const wrap = p.crosses_seam || x2 > 4000;
+    const kp = wrap ? p.keypoints.map(k=>[k[0]<2000?k[0]+4000:k[0],k[1],k[2]])
+                    : p.keypoints;
+    const offs = wrap ? [0,-4000] : [0];
+    for(const off of offs){
+      ctx.strokeRect((x1+off)*sc,y1*sc,(x2-x1)*sc,(y2-y1)*sc);
+      for(const [a,b] of SK){
+        if(kp[a]&&kp[b]&&kp[a][2]>.3&&kp[b][2]>.3&&Math.abs(kp[a][0]-kp[b][0])<2000){
+          ctx.beginPath();ctx.moveTo((kp[a][0]+off)*sc,kp[a][1]*sc);
+          ctx.lineTo((kp[b][0]+off)*sc,kp[b][1]*sc);ctx.stroke();}}
+      for(const [x,y,c] of kp) if(c>.3){
+        ctx.beginPath();ctx.arc((x+off)*sc,y*sc,4,0,7);ctx.fill();}
+    }
     ctx.font='bold 20px sans-serif';
-    ctx.fillText('P'+p.id+' '+p.conf.toFixed(2),x1*sc+4,Math.max(22,y1*sc-6));
-    for(const [a,b] of SK){
-      if(kp[a]&&kp[b]&&kp[a][2]>.3&&kp[b][2]>.3&&Math.abs(kp[a][0]-kp[b][0])<2000){
-        ctx.beginPath();ctx.moveTo(kp[a][0]*sc,kp[a][1]*sc);
-        ctx.lineTo(kp[b][0]*sc,kp[b][1]*sc);ctx.stroke();}}
-    for(const [x,y,c] of kp) if(c>.3){
-      ctx.beginPath();ctx.arc(x*sc,y*sc,4,0,7);ctx.fill();}
+    ctx.fillText('P'+p.id+' '+p.conf.toFixed(2),
+      (Math.min(x1,3960))*sc+4,Math.max(22,y1*sc-6));
     vals+=`<span style="color:${col}"><b>P${p.id}</b></span> conf ${p.conf.toFixed(2)} · khớp tin cậy ${p.keypoints.filter(k=>k[2]>.3).length}/17 &nbsp;`;
   }
   $('vals').innerHTML=vals||'<i>không có người trong frame này</i>';
