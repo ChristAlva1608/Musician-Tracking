@@ -64,6 +64,12 @@ if __name__ == '__main__':
     outdir = Path(sys.argv[2])
     out = convert(indir)
     of = outdir / 'people_2d_v3.json'
+    if of.exists():   # giữ lon_offsets đã đo (calib_cache_offset.py) khi export lại
+        try:
+            old = json.load(open(of))
+            if old.get('lon_offsets'): out['lon_offsets'] = old['lon_offsets']
+        except Exception:
+            pass
     json.dump(out, open(of, 'w'))
     n = {c: sum(len(t['frames']) for t in v['tracklets']) for c, v in out['cameras'].items()}
     print('wrote', of, '| frames per camera:', n, '| step_s:', out['step_s'])
