@@ -1,0 +1,309 @@
+<!doctype html><meta charset=utf-8><title>Christina Cam-2 · lục địa 3D (x,y equirect × z thời gian)</title>
+<style>
+html,body{margin:0;height:100%;background:#07090f;color:#dfe3ea;font:13px system-ui;overflow:hidden}
+#cv{position:fixed;inset:0}
+#panel{position:fixed;top:0;left:0;right:0;background:#0d1220f2;border-bottom:1px solid #2b3350;padding:6px 4px;line-height:1.3;display:flex;flex-direction:row;align-items:stretch;overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:thin}
+#panel::-webkit-scrollbar{height:9px}#panel::-webkit-scrollbar-thumb{background:#38415a;border-radius:4px}#panel::-webkit-scrollbar-track{background:#141a2c}
+#panel h3{margin:0;font-size:13px;white-space:nowrap}
+#panel label{display:flex;align-items:center;gap:5px;margin:1px 0;white-space:nowrap}
+#panel input[type=range]{width:78px;flex:none}
+#panel select{max-width:210px}
+.sec{display:inline-flex;flex-direction:column;gap:1px;padding:0 10px;border-right:1px solid #222c44;flex:0 0 auto;justify-content:flex-start}
+.sec:last-child{border-right:none}
+.grp{color:#8fd;font-size:11px;font-weight:bold;margin:0 0 2px}
+b{color:#8fd} .ax{font-weight:bold}
+#hud{position:fixed;bottom:8px;left:10px;color:#8b94a8;font-size:12px}
+button{background:#1b2237;color:#dfe3ea;border:1px solid #38415a;border-radius:5px;padding:4px 8px;font:12px system-ui;cursor:pointer}
+button:hover{background:#28324a}
+</style>
+<canvas id=cv></canvas>
+<div id=panel>
+ <div class=sec>
+  <h3>Lục địa 3D — Christina Cam-2 <span style="color:#ffd166;font-size:12px;font-weight:normal">v20260725-9 (rẽ hết trong gate)</span></h3>
+  <div style=font-size:11px><span class=ax style=color:#ff6b6b>X</span>=ngang(0..4000) · <span class=ax style=color:#6bff6b>Y</span>=cao(0..2000) · <span class=ax style=color:#6b9bff>Z</span>=thời gian(6fps)</div>
+  <div style=color:#8b94a8;font-size:11px>↔ cuộn ngang xem thêm control</div>
+ </div>
+
+ <div class=sec>
+  <div class=grp>HIỂN THỊ</div>
+  <label>MODE: <select id=src><option value=det3d_kalman.json>Kalman · nối CẢ-THÂN (1 det)</option><option value=det3d_jointindep.json selected>joint ĐỘC LẬP · mỗi LOẠI khớp = 1 track</option><option value=det3d.json>greedy · IoU box (không Kalman)</option></select></label>
+  <label>Z giãn: <input type=range id=zs min=2 max=100 value=47><span id=zsv></span></label>
+  <label>track tối thiểu: <input type=range id=ml min=1 max=300 value=6><span id=mlv></span>f</label>
+  <label>% DÀI nhất: <input type=range id=toppct min=1 max=100 value=100><span id=tpv></span>%</label>
+  <div style=color:#8b94a8;font-size:11px>(kéo % xuống để bỏ nhánh cụt)</div>
+ </div>
+
+ <div class=sec>
+  <div class=grp>VỊ TRÍ (Kalman xuất)</div>
+  <label><input type=checkbox id=dots checked> chấm KHỚP (màu bộ phận)</label>
+  <label><input type=checkbox id=trails checked> SỢI khớp theo thời gian</label>
+  <label><input type=checkbox id=bones> XƯƠNG mỗi frame</label>
+  <label><input type=checkbox id=confop checked> mờ theo <b>conf YOLO</b></label>
+ </div>
+
+ <div class=sec>
+  <div class=grp id=ghd>KALMAN cho biết thêm</div>
+  <label><input type=checkbox id=speed> TỐC ĐỘ (<span style=color:#f55>nóng=nhanh</span>·<span style=color:#59f>nguội=chậm</span>)</label>
+  <label><input type=checkbox id=perr> SAI-SỐ đoán (<span style=color:#f33>đỏ=ra ngoài σ</span>=bất ngờ)</label>
+  <label><input type=checkbox id=sig> σ ĐỘ-CHẮC (chấm <b>to = càng mù</b>)</label>
+ </div>
+
+ <div class=sec>
+  <div class=grp>TRACK</div>
+  <label><input type=checkbox id=live> highlight SỐNG</label>
+  <div style=color:#8b94a8;font-size:11px>màu=track sống · <span style=color:#888>xám=đầu cụt</span></div>
+ </div>
+
+ <div class=sec>
+  <div class=grp>BOX thô</div>
+  <label><input type=checkbox id=rects> vẽ Ô (cao×rộng)</label>
+  <label>độ mờ Ô: <input type=range id=op min=2 max=100 value=22><span id=opv></span>%</label>
+ </div>
+
+ <div class=sec>
+  <div class=grp>VIDEO nền</div>
+  <label><input type=checkbox id=vid> đắp VIDEO equirect</label>
+  <label>giây: <input type=range id=vt min=0 max=1799 value=120 step=0.1667><span id=vtv></span>s</label>
+  <label>mờ: <input type=range id=vop min=10 max=100 value=85><span id=vopv></span>%</label>
+  <div style=color:#8b94a8;font-size:11px><button id=vgo style=padding:2px 6px>camera → tấm</button> · <b>, .</b>=lùi/tới 1/6s</div>
+ </div>
+
+ <div class=sec>
+  <div class=grp>CHÚ THÍCH · NÚT</div>
+  <div style=color:#8b94a8;font-size:11px>bộ phận:
+   <span style=color:#ffe14d>đầu</span> <span style=color:#00e5ff>vai</span> <span style=color:#3399ff>khuỷu</span> <span style=color:#7a5bff>cổtay</span> <span style=color:#ff5bd0>hông</span> <span style=color:#ff4d4d>gối</span> <span style=color:#ff9a3c>cổchân</span> · trái sáng, phải tối</div>
+  <div id=stat style=color:#8b94a8></div>
+  <div style=margin-top:3px;display:flex;gap:5px;flex-wrap:wrap>
+   <button id=vfit>Fit</button><button id=vtop>x↔giờ</button>
+   <button id=vside>cao↔giờ</button><button id=vtime>dọc giờ</button>
+  </div>
+  <div style=color:#8b94a8;font-size:11px>click chấm=cô lập track · <b>W/S</b>bay <b>A/D</b>ngang <b>R/F</b>dọc <b>[ ]</b>bước<span id=stepv>18</span></div>
+ </div>
+</div>
+<div id=hud>đang tải…</div>
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script>
+const g=i=>document.getElementById(i);
+const S=1/20;                       // toạ độ equirect / 20 → đơn vị scene
+const EW=4000, EH=2000;             // ★SSOT: kích thước equirect. Mọi phép chiếu/seam DẪN XUẤT.
+const MX=x=>(x-EW/2)*S, MY=y=>(EH/2-y)*S;   // equirect(x,y) → scene(X,Y) — DÙNG CHUNG
+let DET=[],TL={},scene,camera,renderer,controls,vidPlane=null,texLoader=null;
+let selTid=null, pointTid=[];   // click 1 chấm → cô lập track đó
+let selFrames=[], selIdx=0;     // các giây track đang chọn tồn tại — để ,/. bước qua từng frame của nó
+function jumpSel(){
+ if(selTid==null||!selFrames.length) return;
+ const t=selFrames[selIdx]; g('vt').value=t; g('vid').checked=true; updateVideo();
+ const d=DET.find(x=>x[5]===selTid && Math.abs(x[4]-t)<0.01), zs=+g('zs').value/10, z=t*zs;
+ const nt=new THREE.Vector3(d?MX((d[0]+d[2])/2):0, d?MY((d[1]+d[3])/2):0, z);
+ const delta=nt.clone().sub(controls.target); camera.position.add(delta); controls.target.copy(nt); controls.update();
+ g('selfr').textContent=`frame ${selIdx+1}/${selFrames.length} · t=${t.toFixed(2)}s`;
+}
+function updateVideo(){
+ if(!vidPlane) return;
+ const on=g('vid').checked; vidPlane.visible=on;
+ g('vtv').textContent=(+g('vt').value).toFixed(2); g('vopv').textContent=g('vop').value;
+ if(!on) return;
+ const zs=+g('zs').value/10, t=+g('vt').value;
+ vidPlane.position.z=t*zs; vidPlane.material.opacity=+g('vop').value/100;
+ const idx=Math.round(t*6), f='frames6/g_'+String(idx).padStart(5,'0')+'.jpg';
+ if(vidPlane.userData.f!==f){ vidPlane.userData.f=f;
+   texLoader.load(f,tex=>{tex.colorSpace=THREE.SRGBColorSpace; vidPlane.material.map=tex; vidPlane.material.needsUpdate=true;},
+     undefined, ()=>{g('vtv').textContent=(+g('vt').value).toFixed(2)+' (frame chưa trích)';});
+ }
+}
+const geoP=new THREE.BufferGeometry(), geoB=new THREE.BufferGeometry(), geoT=new THREE.BufferGeometry(),
+      geoR=new THREE.BufferGeometry(), geoV=new THREE.BufferGeometry();
+const PAIRS=[[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]];
+const TYPEHUE=[0.13,0.13,0.13,0.15,0.15,0.50,0.50,0.60,0.60,0.70,0.70,0.83,0.83,0.98,0.98,0.08,0.08];
+const JC17=TYPEHUE.map((h,i)=>{const c=new THREE.Color();c.setHSL(h,0.92,i===0?0.85:(i%2===1?0.68:0.42));return c;});
+let pointsObj=null,bonesObj=null,trailsObj=null,rectObj=null,velObj=null;
+function col(d){ const c=new THREE.Color(); c.setHSL((d[5]*0.61803)%1,0.7,0.6); return c; }
+const HALF=EW*S/2;    // ★DẪN XUẤT: đoạn vượt HALF = vắt seam → vẽ 2 mảnh qua 2 mép
+function wseg(P,C,xa,ya,za,xb,yb,zb,r,gc,b){
+ if(Math.abs(xb-xa)>HALF){const sh=xb>xa?EW*S:-EW*S;
+   P.push(xa,ya,za, xb-sh,yb,zb, xa+sh,ya,za, xb,yb,zb);
+   C.push(r,gc,b,r,gc,b, r,gc,b,r,gc,b);
+ } else {P.push(xa,ya,za, xb,yb,zb); C.push(r,gc,b, r,gc,b);}
+}
+function chainSet(tid){   // tid + toàn bộ tổ tiên (đi ngược PA) = đường sinh→lá; không PA (Kalman/greedy) → chỉ chính nó
+ const s=new Set(); let id=tid, guard=0;
+ while(id!=null&&id!=-1&&!s.has(+id)&&guard++<100000){ s.add(+id); const p=window.PA?window.PA[id]:undefined; id=(p==null)?-1:+p; }
+ return s;
+}
+function build(){
+ const minL=+g('ml').value, zs=+g('zs').value/10;
+ g('zsv').textContent=zs.toFixed(1); g('mlv').textContent=minL; g('opv').textContent=g('op').value;
+ const confOn=g('confop').checked, liveOn=g('live').checked, speedOn=g('speed').checked, perrOn=g('perr').checked, sigOn=g('sig').checked;
+ const hc=new THREE.Color();
+ const topR=1-(+g('toppct').value/100); g('tpv').textContent=g('toppct').value;   // chỉ giữ track ở top-% chuỗi dài nhất
+ const chain = selTid!=null ? chainSet(selTid) : null;   // cô lập = CẢ CHUỖI tổ tiên (đường thắng đầy đủ), bỏ qua bộ lọc độ-dài
+ const keep=d=> chain ? chain.has(d[5]) : (TL[d[5]]>=minL&&((window.LENRANK||{})[d[5]]||0)>=topR);
+ pointTid=[];   // dựng lại map chấm→track cho click
+ const PX=k=>MX(k[0]), PY=k=>MY(k[1]);
+ // Ô (box thô)
+ const RP=[],RC=[]; let nd=0;
+ if(g('rects').checked) for(const d of DET){ if(!keep(d)) continue; nd++;
+   const X0=MX(d[0]),X1=MX(d[2]),Y0=MY(d[1]),Y1=MY(d[3]),Z=d[4]*zs;
+   const c=col(d); if(confOn) c.multiplyScalar(Math.max(0.03,d[6])); const q=[[X0,Y0],[X1,Y0],[X1,Y1],[X0,Y1]];
+   for(let e=0;e<4;e++){const a=q[e],b=q[(e+1)%4]; RP.push(a[0],a[1],Z,b[0],b[1],Z); RC.push(c.r,c.g,c.b,c.r,c.g,c.b);}
+ }
+ geoR.setAttribute('position',new THREE.Float32BufferAttribute(RP,3)); geoR.setAttribute('color',new THREE.Float32BufferAttribute(RC,3));
+ // CHẤM (vị trí) + cỡ theo σ · XƯƠNG · VẬN TỐC
+ const KP=[],KC=[],KS=[],BP=[],BC=[],VP=[],VC=[];
+ if(g('dots').checked||g('bones').checked||perrOn) for(const d of DET){
+   if(!keep(d)) continue;
+   const Z=d[4]*zs, dim=confOn?Math.max(0.03,d[6]):1;
+   if(window.PTFMT){                                   // schema ĐIỂM: mỗi det = 1 khớp (d[7]=LOẠI khớp)
+     if(d[6]<=0.05) continue; const jt=d[7], px=d[0], py=d[1];
+     if(g('dots').checked){ let jr,jg,jb;
+       if(speedOn&&d[8]!=null){ const sp=Math.min(Math.hypot(d[8],d[9])/20,1); hc.setHSL((1-sp)*0.62,0.95,0.55); jr=hc.r;jg=hc.g;jb=hc.b; }
+       else { const jc=JC17[jt]; jr=jc.r*dim;jg=jc.g*dim;jb=jc.b*dim; }
+       KP.push(MX(px),MY(py),Z); KC.push(jr,jg,jb); pointTid.push(d[5]);
+       KS.push(sigOn&&d[10]!=null ? 3+Math.min(d[10],40)*0.55 : 4); }
+     if(perrOn&&d[11]!=null&&(d[11]||d[12])){ const dx=Math.abs(px-d[11]),wd=Math.min(dx,EW-dx);
+       const err=Math.hypot(wd,py-d[12]), big=err>(d[10]||5);
+       wseg(VP,VC, MX(d[11]),MY(d[12]),Z, MX(px),MY(py),Z, big?1:0.35, big?0.2:0.35, big?0.2:0.35); }
+     continue;
+   }
+   const K=d[7];
+   for(let i=0;i<17;i++){ const kp=K[i]; if(kp[2]<=0.05) continue;
+     if(g('dots').checked){ let jr,jg,jb;
+       if(speedOn&&kp[3]!=null){ const sp=Math.min(Math.hypot(kp[3],kp[4])/20,1); hc.setHSL((1-sp)*0.62,0.95,0.55); jr=hc.r;jg=hc.g;jb=hc.b; }
+       else { const jc=JC17[i]; jr=jc.r*dim;jg=jc.g*dim;jb=jc.b*dim; }
+       KP.push(PX(kp),PY(kp),Z); KC.push(jr,jg,jb); pointTid.push(d[5]);
+       KS.push(sigOn&&kp[5]!=null ? 3+Math.min(kp[5],40)*0.55 : 4); }
+     if(perrOn&&kp[6]!=null&&(kp[6]||kp[7])){ const dx=Math.abs(kp[0]-kp[6]),wd=Math.min(dx,EW-dx);
+       const err=Math.hypot(wd,kp[1]-kp[7]), big=err>(kp[5]||5);   // ra ngoài vòng σ = bất ngờ
+       wseg(VP,VC, MX(kp[6]),MY(kp[7]),Z, PX(kp),PY(kp),Z, big?1:0.35, big?0.2:0.35, big?0.2:0.35); }
+   }
+   if(g('bones').checked){const tc=col(d); tc.multiplyScalar(dim);
+     for(const p of PAIRS){const A=K[p[0]],B=K[p[1]]; if(A[2]>0.05&&B[2]>0.05) wseg(BP,BC,PX(A),PY(A),Z,PX(B),PY(B),Z, tc.r,tc.g,tc.b);}}
+ }
+ // SỢI khớp theo thời gian (màu bộ phận · hoặc màu-track khi highlight sống)
+ const TP=[],TC=[];
+ if(g('trails').checked){ const cc=new THREE.Color();
+   const byT={}; for(const d of DET){ if(!keep(d)) continue; (byT[d[5]]=byT[d[5]]||[]).push(d); }
+   for(const tid in byT){ const arr=byT[tid].sort((a,b)=>a[4]-b[4]);
+     let tcol=null;
+     if(liveOn){ const rank=(window.LENRANK||{})[tid]||0; cc.setHSL((tid*0.61803)%1,rank,0.6); tcol={r:cc.r,g:cc.g,b:cc.b}; }
+     if(window.PTFMT){                                  // track = 1 LOẠI khớp → nối điểm liên tiếp, màu theo loại
+       const jc=liveOn?tcol:JC17[arr[0][7]];
+       for(let i=0;i<arr.length-1;i++){ const A=arr[i],B=arr[i+1];
+         const dim=confOn?Math.max(0.03,Math.min(A[6],B[6])):1;
+         wseg(TP,TC, MX(A[0]),MY(A[1]),A[4]*zs, MX(B[0]),MY(B[1]),B[4]*zs, jc.r*dim,jc.g*dim,jc.b*dim); }
+       continue;
+     }
+     for(let j=0;j<17;j++){ const jc=liveOn?tcol:JC17[j];
+       for(let i=0;i<arr.length-1;i++){ const A=arr[i][7][j],B=arr[i+1][7][j];
+         if(A[2]>0.05&&B[2]>0.05){ const dim=confOn?Math.max(0.03,Math.min(arr[i][6],arr[i+1][6])):1;
+           wseg(TP,TC,PX(A),PY(A),arr[i][4]*zs, PX(B),PY(B),arr[i+1][4]*zs, jc.r*dim,jc.g*dim,jc.b*dim);}}}}
+ }
+ geoP.setAttribute('position',new THREE.Float32BufferAttribute(KP,3)); geoP.setAttribute('color',new THREE.Float32BufferAttribute(KC,3));
+ geoP.setAttribute('sz',new THREE.Float32BufferAttribute(KS,1));
+ geoP.computeBoundingSphere();   // ★ raycaster click dùng boundingSphere; đổi mode/dựng lại phải tính lại kẻo tia bị cắt sớm → 0 hit
+ geoB.setAttribute('position',new THREE.Float32BufferAttribute(BP,3)); geoB.setAttribute('color',new THREE.Float32BufferAttribute(BC,3));
+ geoT.setAttribute('position',new THREE.Float32BufferAttribute(TP,3)); geoT.setAttribute('color',new THREE.Float32BufferAttribute(TC,3));
+ geoV.setAttribute('position',new THREE.Float32BufferAttribute(VP,3)); geoV.setAttribute('color',new THREE.Float32BufferAttribute(VC,3));
+ rectObj.material.opacity=+g('op').value/100;
+ updateVideo();
+ g('stat').innerHTML=(selTid!=null?`<b style="color:#ffd24d">▶ CHUỖI #${selTid}</b> (đường ${(window.FULLLEN||{})[selTid]||TL[selTid]}f · ${chain?chain.size:1} đoạn nhánh) · <span id=clr style="cursor:pointer;text-decoration:underline">xem tất cả</span><br>`:`<span style=color:#8b94a8>click 1 chấm = cô lập CẢ CHUỖI (nhánh + tổ tiên)</span><br>`)+`${Object.keys(TL).filter(k=>TL[k]>=minL).length} track (≥${minL}f)`;
+ if(selTid!=null){const c=g('clr'); if(c)c.onclick=()=>{selTid=null;build();};}
+}
+function init(){
+ scene=new THREE.Scene(); scene.background=new THREE.Color(0x07090f);
+ camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,20000); camera.position.set(180,120,420);
+ renderer=new THREE.WebGLRenderer({canvas:g('cv'),antialias:true}); renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(devicePixelRatio);
+ controls=new THREE.OrbitControls(camera,renderer.domElement); controls.enableDamping=true;
+ controls.screenSpacePanning=true; controls.panSpeed=1.4; controls.zoomSpeed=1.4; controls.rotateSpeed=0.9;
+ // CLICK 1 chấm → cô lập track (chặn nhầm với kéo chuột)
+ let downXY=null;
+ renderer.domElement.addEventListener('pointerdown',e=>{downXY=[e.clientX,e.clientY];});
+ renderer.domElement.addEventListener('click',e=>{
+   if(downXY&&Math.hypot(e.clientX-downXY[0],e.clientY-downXY[1])>6) return;   // là kéo, bỏ qua
+   const r=renderer.domElement.getBoundingClientRect();
+   const mx=e.clientX-r.left, my=e.clientY-r.top;   // bắt điểm theo MÀN HÌNH: chiếu mọi chấm ra pixel, chọn cái gần con trỏ nhất
+   const pos=geoP.getAttribute('position'); if(!pos){selTid=null;build();return;}
+   const v=new THREE.Vector3(); let best=14*14, bi=-1;   // ngưỡng 14px
+   for(let i=0;i<pos.count;i++){
+     v.set(pos.getX(i),pos.getY(i),pos.getZ(i)).project(camera);
+     if(v.z<-1||v.z>1) continue;                   // sau lưng camera / ngoài khung
+     const sx=(v.x*0.5+0.5)*r.width, sy=(-v.y*0.5+0.5)*r.height, dd=(sx-mx)*(sx-mx)+(sy-my)*(sy-my);
+     if(dd<best){best=dd; bi=i;}
+   }
+   selTid = bi>=0 ? pointTid[bi] : null; build();
+ });
+ const ax=(a,b,c)=>{const gg=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a),new THREE.Vector3(...b)]);
+   scene.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:c})));};
+ ax([-100,-50,0],[100,-50,0],0xff6b6b); ax([-100,-50,0],[-100,50,0],0x6bff6b); ax([-100,-50,0],[-100,-50,3600],0x6b9bff);
+ rectObj=new THREE.LineSegments(geoR,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:0.22}));
+ bonesObj=new THREE.LineSegments(geoB,new THREE.LineBasicMaterial({vertexColors:true}));
+ trailsObj=new THREE.LineSegments(geoT,new THREE.LineBasicMaterial({vertexColors:true}));
+ velObj=new THREE.LineSegments(geoV,new THREE.LineBasicMaterial({vertexColors:true}));
+ // CHẤM: shader cho cỡ per-điểm (σ)
+ const pmat=new THREE.ShaderMaterial({vertexColors:true,
+   vertexShader:'attribute float sz; varying vec3 vc; void main(){ vc=color; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_PointSize=sz; }',
+   fragmentShader:'varying vec3 vc; void main(){ vec2 c=gl_PointCoord-0.5; if(dot(c,c)>0.25) discard; gl_FragColor=vec4(vc,1.0); }'});
+ pointsObj=new THREE.Points(geoP,pmat);
+ [rectObj,bonesObj,trailsObj,velObj,pointsObj].forEach(o=>o.frustumCulled=false);
+ scene.add(rectObj); scene.add(bonesObj); scene.add(trailsObj); scene.add(velObj); scene.add(pointsObj);
+ texLoader=new THREE.TextureLoader();
+ vidPlane=new THREE.Mesh(new THREE.PlaneGeometry(EW*S,EH*S),
+   new THREE.MeshBasicMaterial({transparent:true,opacity:0.85,depthWrite:false,side:THREE.DoubleSide,color:0xffffff}));
+ vidPlane.frustumCulled=false; vidPlane.visible=false; scene.add(vidPlane);
+ const VIDCTL=new Set(['vid','vt','vop']);
+ for(const e of document.querySelectorAll('input,select')){
+   if(VIDCTL.has(e.id)) e.addEventListener('input',updateVideo); else e.addEventListener('input',build);
+ }
+ for(const e of document.querySelectorAll('input,select')) e.addEventListener('change',()=>e.blur());
+ g('vgo').onclick=()=>{const zs=+g('zs').value/10,z=(+g('vt').value)*zs; controls.target.set(0,0,z); camera.position.set(0,0,z+130); controls.update();};
+ g('vfit').onclick=()=>frameView('fit'); g('vtop').onclick=()=>frameView('top');
+ g('vside').onclick=()=>frameView('side'); g('vtime').onclick=()=>frameView('time');
+ const nav={step:18};
+ addEventListener('keydown',e=>{
+   if(e.target.tagName==='INPUT'&&/text|number|search/.test(e.target.type)) return;
+   const k=e.key.toLowerCase(),s=nav.step; let d=null;
+   if(k==='w') d=[0,0,s]; else if(k==='s') d=[0,0,-s];
+   else if(k==='a') d=[-s,0,0]; else if(k==='d') d=[s,0,0];
+   else if(k==='r') d=[0,s,0]; else if(k==='f') d=[0,-s,0];
+   else if(k===']'){nav.step*=1.5;g('stepv').textContent=nav.step.toFixed(0);return;} else if(k==='['){nav.step=Math.max(2,nav.step/1.5);g('stepv').textContent=nav.step.toFixed(0);return;}
+   else if(k==='.'||k===','){const dt=(k==='.'?1:-1)/6; g('vt').value=Math.max(0,Math.min(+g('vt').max,+g('vt').value+dt)); if(!g('vid').checked)g('vid').checked=true; updateVideo(); e.preventDefault(); return;}
+   if(d){const v=new THREE.Vector3(...d);camera.position.add(v);controls.target.add(v);controls.update();e.preventDefault();}
+ });
+ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+ frameView('fit'); animate();
+}
+function frameView(mode){
+ const zmax=(window.MAXT||1800)*(+g('zs').value/10), cz=zmax/2; controls.target.set(0,0,cz);
+ if(mode==='fit')       camera.position.set(zmax*0.45,zmax*0.32,cz+zmax*0.65);
+ else if(mode==='top')  camera.position.set(0.1,zmax*0.85,cz);
+ else if(mode==='side') camera.position.set(zmax*0.85,0.1,cz);
+ else if(mode==='time') camera.position.set(60,40,cz+zmax*0.9);
+ controls.update();
+}
+function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera);}
+let inited=false;
+function updateSrcUI(){   // mode greedy không có vận tốc/σ (k chỉ [x,y,c]) → grey 2 cái đó
+ const kal=window.PTFMT || (DET.length&&DET[0][7]&&DET[0][7][0]&&DET[0][7][0].length>=6);   // có vx,vy,σ,ppx,ppy? (Kalman & joint-độc-lập có; greedy không)
+ for(const id of ['speed','perr','sig']){const el=g(id);el.disabled=!kal;if(!kal)el.checked=false;const lab=el.closest('label');if(lab)lab.style.opacity=kal?1:0.4;}
+ g('ghd').style.opacity=kal?1:0.4;
+}
+function loadSrc(file){
+ g('hud').textContent='đang tải '+file+'…';
+ fetch(file).then(r=>r.json()).then(d=>{DET=d.dets;TL=d.tl;
+  window.PTFMT = DET.length>0 && typeof DET[0][7]==='number';   // schema ĐIỂM (joint=loại-khớp): d[7] là SỐ loại, không phải mảng k[]
+  window.PA = d.pa || {};   // gia phả: PA[id]=id CHA (-1=gốc). Không có (Kalman/greedy) → chuỗi = chính nó
+  window.MAXT=DET.reduce((m,x)=>Math.max(m,x[4]),0); g('vt').max=window.MAXT.toFixed(2);
+  window.FULLLEN={};   // độ dài CHUỖI sinh→tử = đoạn này + mọi tổ tiên (không theo đoạn lẻ)
+  const flen=id=>{ if(window.FULLLEN[id]!=null) return window.FULLLEN[id];
+    window.FULLLEN[id]=(TL[id]||0); const p=window.PA[id];
+    const v=(TL[id]||0)+((p!=null&&p!=-1)?flen(p):0); window.FULLLEN[id]=v; return v; };
+  for(const id in TL) flen(id);
+  const ls=Object.keys(TL).sort((a,b)=>window.FULLLEN[a]-window.FULLLEN[b]); window.LENRANK={};   // hạng độ-dài CHUỖI (đường dài=cao)
+  ls.forEach((k,i)=>window.LENRANK[k]=ls.length>1?i/(ls.length-1):1);
+  g('hud').textContent=DET.length+' detection · '+file+' · '+Object.keys(TL).length+' track';
+  const first=!inited; if(!inited){init();inited=true;} updateSrcUI(); build(); if(first) frameView('fit');});
+}
+document.getElementById('src').addEventListener('change',e=>loadSrc(e.target.value));
+loadSrc(g('src').value);
+</script>
