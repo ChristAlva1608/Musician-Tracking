@@ -20,7 +20,7 @@ button:hover{background:#28324a}
 <div id=lbls style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:hidden;z-index:5"></div>
 <div id=panel>
  <div class=sec>
-  <h3>Lục địa 3D — Christina Cam-2 <span style="color:#ffd166;font-size:12px;font-weight:normal">v20260726-36 (vuông đầu/cuối TO + glow mạnh + số rõ)</span></h3>
+  <h3>Lục địa 3D — Christina Cam-2 <span style="color:#ffd166;font-size:12px;font-weight:normal">v20260726-41 (đầu/cuối theo TỪNG DỀ → số cặp đủ 2 đầu)</span></h3>
   <div style=font-size:11px><span class=ax style=color:#ff6b6b>X</span>=ngang(0..4000) · <span class=ax style=color:#6bff6b>Y</span>=cao(0..2000) · <span class=ax style=color:#6b9bff>Z</span>=thời gian(6fps)</div>
   <div style=color:#8b94a8;font-size:11px>↔ cuộn ngang xem thêm control</div>
  </div>
@@ -44,6 +44,12 @@ button:hover{background:#28324a}
   <label><input type=checkbox id=cccolor> màu theo MẢNG (tắt = topology đứt/thẳng/nhánh; bật = mỗi mảng 1 màu)</label>
   <label><input type=checkbox id=massnum> số cặp ĐẦU↔ĐÍT (vuông cùng số = cùng mảng)</label>
   <label><input type=checkbox id=addmode> gộp khớp (click cộng dồn, khỏi shift)</label>
+ </div>
+
+ <div class=sec id=secDelist>
+  <div class=grp>DỀ trong lớp <span style=color:#8b94a8>(tick ĐÚNG 1 loại khớp)</span></div>
+  <div id=destat style=color:#9fb0c8;font-size:11px></div>
+  <div id=delist style="max-height:150px;overflow:auto;font:11px/1.5 monospace;min-width:190px"></div>
  </div>
 
  <div class=sec id=secFilter>
@@ -153,29 +159,31 @@ function computeRawLinks(){   // TẦNG THÔ: mỗi khớp nối successor tốt
  steps.sort((a,b)=>a-b); const P=p=>steps.length?steps[Math.min(steps.length-1,Math.floor(steps.length*p))]:30;
  const LAMBDA=P(0.5), SCALE=Math.max(P(0.9),1); window.RAWSCALE={lambda:LAMBDA,scale:SCALE};   // ★mốc TỪ DATA, không bịa
  // 2) mỗi điểm: successor cost NHỎ NHẤT trong ≤GMAX frame; cost = khoảng-cách + λ×(gap-1). GMAX chỉ là trần TÍNH.
- const GMAX=window.RAWGMAX||6, links=[], adj={}, redge={};   // chân-trời TÌM (kéo được ở panel) — số duy nhất người chọn
+ const GMAX=window.RAWGMAX||6, links=[], adj={};   // chân-trời TÌM (kéo được ở panel) — số duy nhất người chọn
  const edge=(a,b)=>{ (adj[a]=adj[a]||new Set()).add(b); (adj[b]=adj[b]||new Set()).add(a); };   // đồ thị KỀ vô hướng để lần sợi 2 chiều
- const anyJoint=(arr,j)=>{ for(const dj of arr){ if(DET[dj][7][j][2]>0) return true; } return false; };   // frame đó CÓ khớp loại j không (bất kỳ điểm)
  for(let i=0;i<times.length;i++){ const t=times[i];
    for(const di of byFrame[t]){ for(let j=0;j<17;j++){ const kp=DET[di][7][j]; if(kp[2]<=0)continue;
      let bc=1e9,bdi=-1,bt=0,bd=0,bx=0,by=0;
      for(let gp=1;gp<=GMAX && i+gp<times.length;gp++){ const tn=times[i+gp]; if(tn-t>DT*(gp+0.5))break;   // gap THẬT trong data → thôi
        const [d,dj]=nearI(kp,cand(tn,j)); if(dj<0)continue;
        const cost=d+LAMBDA*(gp-1); if(cost<bc){bc=cost;bdi=dj;bt=tn;bd=d;bx=DET[dj][7][j][0];by=DET[dj][7][j][1];} }
-     if(bdi>=0){ const pa=di*17+j, pb=bdi*17+j; links.push([kp[0],kp[1],t, bx,by,bt, j, bd, pa,pb]); edge(pa,pb); }
-     // ĐẦU/CUỐI theo CÓ-MẶT-THẬT (không theo greedy-pick): trước/sau trong tầm nhìn-xa có khớp cùng loại không
-     let pv=false;
-     for(let gp=1;gp<=GMAX && i-gp>=0;gp++){ const tp=times[i-gp]; if(t-tp>DT*(gp+0.5))break; if(anyJoint(byFrame[tp],j)){pv=true;break;} }
-     const isStart=!pv, isEnd=(bdi<0);   // trước KHÔNG có = vừa xuất hiện · sau KHÔNG có = biến mất
-     const code = (isStart&&isEnd)?3 : isStart?1 : isEnd?2 : 0;   // 1=ĐẦU 2=CUỐI 3=lẻ 0=giữa
-     if(code) redge[di*17+j]=code; } } }
- window.RAWLINKS=links; window.RAWADJ=adj; window.RAWEDGE=redge;
+     if(bdi>=0){ const pa=di*17+j, pb=bdi*17+j; links.push([kp[0],kp[1],t, bx,by,bt, j, bd, pa,pb]); edge(pa,pb); } } } }
+ window.RAWLINKS=links; window.RAWADJ=adj;
  // MẢNG = thành phần liên thông của đồ thị link (mỗi mảng = 1 "dề" của loại khớp đó, do luật nối-gần-nhất dán lại)
  const cc={},ccsize={}; let ncc=0;
  for(const k in adj){ const start=+k; if(cc[start]!==undefined)continue; const id=ncc++; const st=[start]; cc[start]=id; let sz=0;
    while(st.length){ const p=st.pop(); sz++; const nb=adj[p]; if(nb)for(const q of nb) if(cc[q]===undefined){cc[q]=id;st.push(q);} }
    ccsize[id]=sz; }
  window.RAWCC=cc; window.RAWCCSIZE=ccsize; window.RAWCCN=ncc;
+ // ĐẦU/CUỐI theo TỪNG DỀ: điểm SỚM nhất = ĐẦU(1), MUỘN nhất = CUỐI(2), dề 1 điểm = lẻ(3) → khớp với bảng DỀ, số cặp đủ 2 đầu
+ const ccMin={},ccMax={};
+ for(const k in cc){ const pid=+k, tt=DET[Math.floor(pid/17)][4], id=cc[pid];
+   if(!ccMin[id]||tt<ccMin[id].t) ccMin[id]={pid,t:tt};
+   if(!ccMax[id]||tt>ccMax[id].t) ccMax[id]={pid,t:tt}; }
+ const redge={};
+ for(const id in ccMin){ if((ccsize[id]||1)<=1 || ccMin[id].pid===ccMax[id].pid) redge[ccMin[id].pid]=3;
+   else { redge[ccMin[id].pid]=1; redge[ccMax[id].pid]=2; } }
+ window.RAWEDGE=redge;
  const byJ={}; for(const k in cc){ const j=(+k)%17; (byJ[j]=byJ[j]||new Set()).add(cc[+k]); }   // mỗi loại khớp có mấy mảng
  window.RAWJMASS={}; for(let j=0;j<17;j++) window.RAWJMASS[j]=byJ[j]?byJ[j].size:0;
 }
@@ -242,7 +250,7 @@ function build(){
  }
  geoR.setAttribute('position',new THREE.Float32BufferAttribute(RP,3)); geoR.setAttribute('color',new THREE.Float32BufferAttribute(RC,3));
  // CHẤM (vị trí) + cỡ theo σ · XƯƠNG · VẬN TỐC
- const KP=[],KC=[],KS=[],KSHP=[],KAL=[],BP=[],BC=[],VP=[],VC=[];
+ const KP=[],KC=[],KS=[],KSHP=[],KAL=[],KPL=[],BP=[],BC=[],VP=[],VC=[];
  if(g('dots').checked||g('bones').checked||perrOn) for(let di=0;di<DET.length;di++){ const d=DET[di];
    if(!keep(d)) continue;
    const Z=d[4]*zs, dim=confOn?Math.max(0.03,d[6]):1;
@@ -252,7 +260,7 @@ function build(){
        if(speedOn&&d[8]!=null){ const sp=Math.min(Math.hypot(d[8],d[9])/20,1); hc.setHSL((1-sp)*0.62,0.95,0.55); jr=hc.r;jg=hc.g;jb=hc.b; }
        else { const jc=JC17[jt]; jr=jc.r;jg=jc.g;jb=jc.b; }
        KP.push(MX(px),MY(py),Z); KC.push(jr,jg,jb); pointTid.push(d[5]);
-       KS.push(sigOn&&d[10]!=null ? 3+Math.min(d[10],40)*0.55 : 4); KSHP.push(0); KAL.push(dim); }
+       KS.push(sigOn&&d[10]!=null ? 3+Math.min(d[10],40)*0.55 : 4); KSHP.push(0); KAL.push(dim); KPL.push(1); }
      if(perrOn&&d[11]!=null&&(d[11]||d[12])){ const dx=Math.abs(px-d[11]),wd=Math.min(dx,EW-dx);
        const err=Math.hypot(wd,py-d[12]), big=err>(d[10]||5);
        wseg(VP,VC, MX(d[11]),MY(d[12]),Z, MX(px),MY(py),Z, big?1:0.35, big?0.2:0.35, big?0.2:0.35); }
@@ -268,9 +276,9 @@ function build(){
      let shp=0, ksz=4;
      if(window.RAW){
        const ec = window.RAWEDGE ? window.RAWEDGE[pid] : 0;
-       if(ec===1){ shp=1; ksz=19; }                       // ĐẦU = vuông đặc TO (vừa xuất hiện)
-       else if(ec===2){ shp=2; ksz=20; }                  // CUỐI = vuông rỗng TO (biến mất)
-       else if(ec===3){ shp=5; ksz=11; }                  // lẻ = tròn nhấp nháy
+       if(ec===1){ shp=1; ksz=19; }                       // ĐẦU dề = vuông đặc TO (sớm nhất)
+       else if(ec===2){ shp=2; ksz=20; }                  // CUỐI dề = vuông rỗng TO (muộn nhất)
+       else if(ec===3||deg<=0){ shp=5; ksz=11; }          // lẻ = tròn nhấp nháy (dề 1 điểm / không link)
        else if(deg>=4){ shp=4; ksz=14; }                  // + chĩa-4+
        else if(deg===3){ shp=3; ksz=14; }                 // Y chĩa-3
        else { shp=0; ksz=4; }                             // tròn thẳng
@@ -281,7 +289,8 @@ function build(){
        else if(CCON){ const c=ccColor(pid); jr=c.r;jg=c.g;jb=c.b; }   // màu theo MẢNG (tuỳ chọn)
        else { const jc=JC17[i]; jr=jc.r;jg=jc.g;jb=jc.b; }            // MÀU = loại khớp (không nhồi topology)
        KP.push(PX(kp),PY(kp),Z); KC.push(jr,jg,jb); pointTid.push(pid);   // độ MỜ để riêng cho alpha (conf), không nhân vào màu
-       KS.push(ksz); KSHP.push(window.RAW?shp:0); KAL.push((confOn?Math.max(0.05,dim):1)*rdim); }   // alpha = conf × (mờ khi chọn mảng khác)
+       KS.push(ksz); KSHP.push(window.RAW?shp:0); KAL.push((confOn?Math.max(0.05,dim):1)*rdim);
+       KPL.push(RSET ? (RSET.has(pid)?1:0) : 1); }   // pl=1: nhấp nháy — chỉ mảng đang chọn (hoặc chưa chọn gì thì tất cả)
      if(perrOn&&kp[6]!=null&&(kp[6]||kp[7])){ const dx=Math.abs(kp[0]-kp[6]),wd=Math.min(dx,EW-dx);
        const err=Math.hypot(wd,kp[1]-kp[7]), big=err>(kp[5]||5);   // ra ngoài vòng σ = bất ngờ
        wseg(VP,VC, MX(kp[6]),MY(kp[7]),Z, PX(kp),PY(kp),Z, big?1:0.35, big?0.2:0.35, big?0.2:0.35); }
@@ -317,14 +326,16 @@ function build(){
  }
  // NHÃN SỐ cặp đầu↔đít: mỗi mảng 1 số, hiện ở CẢ vuông-đặc lẫn vuông-rỗng của nó → pair được
  window.LBL=[];
- if(MNUM){ const seq={}; let n=0; const CAP=300;
-   for(const e of endpts) if(seq[e.cc]===undefined) seq[e.cc]=++n;
-   for(const e of endpts){ if(window.LBL.length>=CAP) break; window.LBL.push([e.x,e.y,e.z, seq[e.cc]]); }
-   if(endpts.length>CAP) g('hud').textContent='số cặp: hiện '+CAP+'/'+endpts.length+' mép — kéo NHÌN XA lên cho gọn'; else g('hud').textContent=''; }
+ if(MNUM){ const byCC={}; for(const e of endpts){ (byCC[e.cc]=byCC[e.cc]||[]).push(e); }   // gom mép theo mảng → đánh số CẢ 2 đầu
+   const ccs=Object.keys(byCC).sort((a,b)=>((window.RAWCCSIZE||{})[b]||0)-((window.RAWCCSIZE||{})[a]||0));   // mảng to trước
+   const CAPM=150; let n=0;
+   for(const cc of ccs){ if(n>=CAPM) break; n++; for(const e of byCC[cc]) window.LBL.push([e.x,e.y,e.z, n]); }   // cùng số ở đầu VÀ đuôi
+   g('hud').textContent = ccs.length>CAPM ? ('số cặp: '+CAPM+'/'+ccs.length+' mảng to nhất — kéo NHÌN XA cho gọn') : ''; }
  buildLbls();
  geoP.setAttribute('position',new THREE.Float32BufferAttribute(KP,3)); geoP.setAttribute('color',new THREE.Float32BufferAttribute(KC,3));
  geoP.setAttribute('sz',new THREE.Float32BufferAttribute(KS,1));
  geoP.setAttribute('shp',new THREE.Float32BufferAttribute(KSHP,1)); geoP.setAttribute('al',new THREE.Float32BufferAttribute(KAL,1));
+ geoP.setAttribute('pl',new THREE.Float32BufferAttribute(KPL,1));
  geoP.computeBoundingSphere();   // ★ raycaster click dùng boundingSphere; đổi mode/dựng lại phải tính lại kẻo tia bị cắt sớm → 0 hit
  if(pointsObj){ const m=pointsObj.material;   // NORMAL blending + alpha=conf → đọc HÌNH rõ (không haze cộng-dồn)
    m.blending=THREE.NormalBlending; m.transparent=true; m.depthWrite=false; m.needsUpdate=true; }
@@ -358,6 +369,25 @@ function build(){
    ? `<br><span style=color:#ff9a3c>⚠ khoá giây: CHƯA chọn mảng → click 1 mảng thì mới có [đầu,cuối] để khoá (giờ đang mở full)</span>` : '';
  g('stat').innerHTML=selMsg+`<br>`+line2+curveStr+lockHint;
  if(selTid!=null){const c=g('clr'); if(c)c.onclick=()=>{selTid=null;window.SEEDS=[];build();};}
+ // BẢNG DỀ của lớp: hiện khi tick ĐÚNG 1 loại khớp · click hàng = chọn dề đó (khỏi săn trong 3D)
+ const secD=g('secDelist');
+ if(window.RAW && RAWJSET.size===1 && window.RAWCC){ secD.style.display='';
+   const jj=[...RAWJSET][0], deMap={};
+   for(const k in window.RAWCC){ const pid=+k; if(pid%17!==jj) continue; const cc=window.RAWCC[pid], t=DET[Math.floor(pid/17)][4];
+     let e=deMap[cc]; if(!e){ deMap[cc]={sz:(window.RAWCCSIZE[cc]||1),a:t,b:t,rep:pid}; } else { if(t<e.a){e.a=t;e.rep=pid;} if(t>e.b)e.b=t; } }
+   const des=Object.values(deMap).sort((x,y)=>y.sz-x.sz);
+   const sizes=des.map(d=>d.sz).sort((a,b)=>a-b), med=sizes.length?sizes[sizes.length>>1]:0;
+   g('destat').innerHTML=`<b>${des.length}</b> dề · to nhất <b>${des.length?des[0].sz:0}</b> · trung vị ${med} chấm`;
+   const CAP=80, rows=des.slice(0,CAP), selCC=(selTid!=null)?window.RAWCC[selTid]:null; let html='';
+   for(let i=0;i<rows.length;i++){ const d=rows[i], on=(window.RAWCC[d.rep]===selCC);
+     html+=`<div class=derow data-rep="${d.rep}" style="cursor:pointer;padding:1px 4px;${on?'background:#2a3550;color:#ffd24d':''}">#${i+1} · ${d.sz}c · ${d.a.toFixed(1)}→${d.b.toFixed(1)}s</div>`; }
+   if(des.length>CAP) html+=`<div style=color:#8b94a8>… +${des.length-CAP} dề nhỏ nữa</div>`;
+   g('delist').innerHTML=html;
+   for(const el of g('delist').querySelectorAll('.derow')) el.onclick=()=>{ const rep=+el.dataset.rep; window.SEEDS=[rep]; selTid=rep;
+     const di=Math.floor(rep/17), jj2=rep%17, kp=DET[di][7][jj2], zz=+g('zs').value/10;   // BAY tới ĐẦU mảng (rep = điểm sớm nhất)
+     const tgt=new THREE.Vector3(MX(kp[0]),MY(kp[1]),DET[di][4]*zz), off=camera.position.clone().sub(controls.target);
+     controls.target.copy(tgt); camera.position.copy(tgt.clone().add(off.normalize().multiplyScalar(120))); controls.update(); build(); };
+ } else { secD.style.display='none'; g('delist').innerHTML=''; g('destat').innerHTML=''; }
 }
 function init(){
  scene=new THREE.Scene(); scene.background=new THREE.Color(0x07090f);
@@ -397,9 +427,9 @@ function init(){
  velObj=new THREE.LineSegments(geoV,new THREE.LineBasicMaterial({vertexColors:true}));
  // CHẤM: shader cho cỡ per-điểm (σ)
  const pmat=new THREE.ShaderMaterial({vertexColors:true, transparent:true, depthWrite:false, uniforms:{uTime:{value:0}},
-   vertexShader:'uniform float uTime; attribute float sz; attribute float shp; attribute float al; varying vec3 vc; varying float vs; varying float va; void main(){ vc=color; vs=shp; va=al; float s=sz; bool pls=(shp>0.5&&shp<2.5)||shp>4.5; if(pls) s*=1.10+0.30*sin(uTime*4.0); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_PointSize=s; }',
+   vertexShader:'uniform float uTime; attribute float sz; attribute float shp; attribute float al; attribute float pl; varying vec3 vc; varying float vs; varying float va; varying float vp; void main(){ vc=color; vs=shp; va=al; vp=pl; float s=sz; bool pls=((shp>0.5&&shp<2.5)||shp>4.5)&&pl>0.5; if(pls) s*=1.10+0.30*sin(uTime*4.0); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_PointSize=s; }',
    fragmentShader:[
-     'uniform float uTime; varying vec3 vc; varying float vs; varying float va;',
+     'uniform float uTime; varying vec3 vc; varying float vs; varying float va; varying float vp;',
      'void main(){ vec2 c=gl_PointCoord-0.5; float keep=0.0;',
      ' if(vs<0.5){ if(dot(c,c)<=0.22) keep=1.0; }',                                            // 0 = tròn đặc (THẲNG)
      ' else if(vs<1.5){ if(max(abs(c.x),abs(c.y))<=0.42) keep=1.0; }',                         // 1 = vuông ĐẶC (ĐẦU)
@@ -412,7 +442,7 @@ function init(){
      ' else if(vs<4.5){ if((abs(c.x)<0.12&&abs(c.y)<0.46)||(abs(c.y)<0.12&&abs(c.x)<0.46)) keep=1.0; }',  // 4 = + (chĩa-4+)
      ' else { if(dot(c,c)<=0.22) keep=1.0; }',                                                 // 5 = tròn (LẺ)
      ' if(keep<0.5) discard;',
-     ' bool pls = (vs>0.5 && vs<2.5) || vs>4.5;',                                              // ĐẦU/CUỐI/lẻ = nhấp nháy + glow mạnh
+     ' bool pls = ((vs>0.5 && vs<2.5) || vs>4.5) && vp>0.5;',                                  // ĐẦU/CUỐI/lẻ nhấp nháy — CHỈ khi pl=1 (mảng đang chọn, hoặc chưa chọn gì)
      ' float a=va; vec3 col=vc;',
      ' if(pls){ float p=0.55+0.45*sin(uTime*4.0); a=min(1.0, 0.55+0.45*p); col=vc*(1.3+1.6*p)+vec3(0.15*p); }',
      ' gl_FragColor=vec4(col, a); }'
