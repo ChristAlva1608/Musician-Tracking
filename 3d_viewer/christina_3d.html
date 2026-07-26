@@ -17,52 +17,60 @@ button{background:#1b2237;color:#dfe3ea;border:1px solid #38415a;border-radius:5
 button:hover{background:#28324a}
 </style>
 <canvas id=cv></canvas>
+<div id=lbls style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:hidden;z-index:5"></div>
 <div id=panel>
  <div class=sec>
-  <h3>Lục địa 3D — Christina Cam-2 <span style="color:#ffd166;font-size:12px;font-weight:normal">v20260725-9 (rẽ hết trong gate)</span></h3>
+  <h3>Lục địa 3D — Christina Cam-2 <span style="color:#ffd166;font-size:12px;font-weight:normal">v20260726-36 (vuông đầu/cuối TO + glow mạnh + số rõ)</span></h3>
   <div style=font-size:11px><span class=ax style=color:#ff6b6b>X</span>=ngang(0..4000) · <span class=ax style=color:#6bff6b>Y</span>=cao(0..2000) · <span class=ax style=color:#6b9bff>Z</span>=thời gian(6fps)</div>
   <div style=color:#8b94a8;font-size:11px>↔ cuộn ngang xem thêm control</div>
  </div>
 
  <div class=sec>
-  <div class=grp>HIỂN THỊ</div>
-  <label>MODE: <select id=src><option value=det3d_kalman.json>Kalman · nối CẢ-THÂN (1 det)</option><option value=det3d_jointindep.json selected>joint ĐỘC LẬP · mỗi LOẠI khớp = 1 track</option><option value=det3d.json>greedy · IoU box (không Kalman)</option></select></label>
+  <div class=grp>CHUNG (mọi mode)</div>
+  <label>MODE: <select id=src><option value=det3d_raw.json selected>detection THÔ · mật độ (CHƯA track)</option><option value=det3d_kalman.json>Kalman · nối CẢ-THÂN (1 det)</option><option value=det3d_jointindep.json>joint ĐỘC LẬP · mỗi LOẠI khớp = 1 track</option><option value=det3d.json>greedy · IoU box (không Kalman)</option></select></label>
   <label>Z giãn: <input type=range id=zs min=2 max=100 value=47><span id=zsv></span></label>
-  <label>track tối thiểu: <input type=range id=ml min=1 max=300 value=6><span id=mlv></span>f</label>
-  <label>% DÀI nhất: <input type=range id=toppct min=1 max=100 value=100><span id=tpv></span>%</label>
-  <div style=color:#8b94a8;font-size:11px>(kéo % xuống để bỏ nhánh cụt)</div>
- </div>
-
- <div class=sec>
-  <div class=grp>VỊ TRÍ (Kalman xuất)</div>
   <label><input type=checkbox id=dots checked> chấm KHỚP (màu bộ phận)</label>
-  <label><input type=checkbox id=trails checked> SỢI khớp theo thời gian</label>
-  <label><input type=checkbox id=bones> XƯƠNG mỗi frame</label>
+  <label><input type=checkbox id=trails checked> SỢI theo thời gian</label>
   <label><input type=checkbox id=confop checked> mờ theo <b>conf YOLO</b></label>
+  <label><input type=checkbox id=axes> trục XYZ (Z dài theo giờ)</label>
  </div>
 
- <div class=sec>
-  <div class=grp id=ghd>KALMAN cho biết thêm</div>
+ <div class=sec id=secRaw>
+  <div class=grp>THÔ (chưa track)</div>
+  <label>nhìn xa: <input type=range id=gmax min=1 max=18 value=6><span id=gmv></span>f <span style=color:#8b94a8>(mất khớp quá nầy = đứt)</span></label>
+  <div style=font-size:11px>loại khớp <span style=color:#8b94a8>(không tick = cả 17; tick nhiều loại = gộp)</span><br><span id=rawjfbox style="display:inline-flex;flex-wrap:wrap;gap:2px 8px;max-width:340px">
+   <label><input type=checkbox class=jf value=0>mũi</label><label><input type=checkbox class=jf value=5>vai-T</label><label><input type=checkbox class=jf value=6>vai-P</label><label><input type=checkbox class=jf value=7>cùi-T</label><label><input type=checkbox class=jf value=8>cùi-P</label><label><input type=checkbox class=jf value=9>cổtay-T</label><label><input type=checkbox class=jf value=10>cổtay-P</label><label><input type=checkbox class=jf value=11>hông-T</label><label><input type=checkbox class=jf value=12>hông-P</label><label><input type=checkbox class=jf value=13>gối-T</label><label><input type=checkbox class=jf value=14>gối-P</label><label><input type=checkbox class=jf value=15>cổchân-T</label><label><input type=checkbox class=jf value=16>cổchân-P</label><label><input type=checkbox class=jf value=1>mắt-T</label><label><input type=checkbox class=jf value=2>mắt-P</label><label><input type=checkbox class=jf value=3>tai-T</label><label><input type=checkbox class=jf value=4>tai-P</label>
+  </span></div>
+  <label><input type=checkbox id=cccolor> màu theo MẢNG (tắt = topology đứt/thẳng/nhánh; bật = mỗi mảng 1 màu)</label>
+  <label><input type=checkbox id=massnum> số cặp ĐẦU↔ĐÍT (vuông cùng số = cùng mảng)</label>
+  <label><input type=checkbox id=addmode> gộp khớp (click cộng dồn, khỏi shift)</label>
+ </div>
+
+ <div class=sec id=secFilter>
+  <div class=grp>LỌC track</div>
+  <label>track tối thiểu: <input type=range id=ml min=1 max=300 value=6><span id=mlv></span>f</label>
+  <label>% DÀI nhất (chuỗi): <input type=range id=toppct min=1 max=100 value=100><span id=tpv></span>%</label>
+ </div>
+
+ <div class=sec id=secMode>
+  <div class=grp>VẼ THEO MODE</div>
+  <label id=lblBones><input type=checkbox id=bones> XƯƠNG mỗi frame</label>
+  <label id=lblLive><input type=checkbox id=live> highlight SỐNG (màu=track)</label>
+  <label id=lblRects><input type=checkbox id=rects> BOX vẽ Ô</label>
+  <label id=lblOp>độ mờ Ô: <input type=range id=op min=2 max=100 value=22><span id=opv></span>%</label>
+ </div>
+
+ <div class=sec id=secKin>
+  <div class=grp id=ghd>ĐỘNG HỌC (Kalman / joint)</div>
   <label><input type=checkbox id=speed> TỐC ĐỘ (<span style=color:#f55>nóng=nhanh</span>·<span style=color:#59f>nguội=chậm</span>)</label>
   <label><input type=checkbox id=perr> SAI-SỐ đoán (<span style=color:#f33>đỏ=ra ngoài σ</span>=bất ngờ)</label>
   <label><input type=checkbox id=sig> σ ĐỘ-CHẮC (chấm <b>to = càng mù</b>)</label>
  </div>
 
  <div class=sec>
-  <div class=grp>TRACK</div>
-  <label><input type=checkbox id=live> highlight SỐNG</label>
-  <div style=color:#8b94a8;font-size:11px>màu=track sống · <span style=color:#888>xám=đầu cụt</span></div>
- </div>
-
- <div class=sec>
-  <div class=grp>BOX thô</div>
-  <label><input type=checkbox id=rects> vẽ Ô (cao×rộng)</label>
-  <label>độ mờ Ô: <input type=range id=op min=2 max=100 value=22><span id=opv></span>%</label>
- </div>
-
- <div class=sec>
   <div class=grp>VIDEO nền</div>
   <label><input type=checkbox id=vid> đắp VIDEO equirect</label>
+  <label><input type=checkbox id=vedge> KHOÁ giây trong mảng đang chọn (kéo coi hết)</label>
   <label>giây: <input type=range id=vt min=0 max=1799 value=120 step=0.1667><span id=vtv></span>s</label>
   <label>mờ: <input type=range id=vop min=10 max=100 value=85><span id=vopv></span>%</label>
   <div style=color:#8b94a8;font-size:11px><button id=vgo style=padding:2px 6px>camera → tấm</button> · <b>, .</b>=lùi/tới 1/6s</div>
@@ -77,7 +85,7 @@ button:hover{background:#28324a}
    <button id=vfit>Fit</button><button id=vtop>x↔giờ</button>
    <button id=vside>cao↔giờ</button><button id=vtime>dọc giờ</button>
   </div>
-  <div style=color:#8b94a8;font-size:11px>click chấm=cô lập track · <b>W/S</b>bay <b>A/D</b>ngang <b>R/F</b>dọc <b>[ ]</b>bước<span id=stepv>18</span></div>
+  <div style=color:#8b94a8;font-size:11px>HÌNH=topology: ●thẳng · ■ĐẦU · ▫CUỐI · Y=chĩa3 · +=chĩa4+ · ●lẻ <span style=color:#6b7688>(đầu/cuối/lẻ nhấp nháy; số cặp = cùng mảng)</span> · MÀU=khớp · MỜ=conf · <b>W/S</b>bay <b>A/D</b>ngang <b>R/F</b>dọc <b>[ ]</b>bước<span id=stepv>18</span></div>
  </div>
 </div>
 <div id=hud>đang tải…</div>
@@ -99,25 +107,30 @@ function jumpSel(){
  const delta=nt.clone().sub(controls.target); camera.position.add(delta); controls.target.copy(nt); controls.update();
  g('selfr').textContent=`frame ${selIdx+1}/${selFrames.length} · t=${t.toFixed(2)}s`;
 }
+function frameFor(plane,t,vis){   // đắp 1 tấm equirect (JPEG 1/6s) tại giây t, đặt ở z đúng giờ
+ if(!plane) return; plane.visible=vis; if(!vis) return;
+ const zs=+g('zs').value/10; plane.position.z=t*zs; plane.material.opacity=+g('vop').value/100;
+ const idx=Math.round(t*6), f='frames6/g_'+String(idx).padStart(5,'0')+'.jpg';
+ if(plane.userData.f!==f){ plane.userData.f=f;
+   texLoader.load(f,tex=>{tex.colorSpace=THREE.SRGBColorSpace; plane.material.map=tex; plane.material.needsUpdate=true;},undefined,()=>{}); }
+}
 function updateVideo(){
  if(!vidPlane) return;
- const on=g('vid').checked; vidPlane.visible=on;
+ // KHOÁ giây trong [đầu,cuối] mảng đang chọn → kéo coi HẾT cách detect suốt mảng
+ const eOn = g('vedge').checked && window.RAW && window.RSTART!=null;
+ if(eOn){ g('vt').min=window.RSTART.toFixed(2); g('vt').max=window.REND.toFixed(2);
+   if(+g('vt').value<window.RSTART) g('vt').value=window.RSTART.toFixed(2);
+   if(+g('vt').value>window.REND) g('vt').value=window.REND.toFixed(2);
+ } else { g('vt').min=0; g('vt').max=(window.MAXT||1800).toFixed(2); }
  g('vtv').textContent=(+g('vt').value).toFixed(2); g('vopv').textContent=g('vop').value;
- if(!on) return;
- const zs=+g('zs').value/10, t=+g('vt').value;
- vidPlane.position.z=t*zs; vidPlane.material.opacity=+g('vop').value/100;
- const idx=Math.round(t*6), f='frames6/g_'+String(idx).padStart(5,'0')+'.jpg';
- if(vidPlane.userData.f!==f){ vidPlane.userData.f=f;
-   texLoader.load(f,tex=>{tex.colorSpace=THREE.SRGBColorSpace; vidPlane.material.map=tex; vidPlane.material.needsUpdate=true;},
-     undefined, ()=>{g('vtv').textContent=(+g('vt').value).toFixed(2)+' (frame chưa trích)';});
- }
+ frameFor(vidPlane, +g('vt').value, g('vid').checked||eOn);   // khoá mảng thì tự bật đắp
 }
 const geoP=new THREE.BufferGeometry(), geoB=new THREE.BufferGeometry(), geoT=new THREE.BufferGeometry(),
       geoR=new THREE.BufferGeometry(), geoV=new THREE.BufferGeometry();
 const PAIRS=[[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]];
 const TYPEHUE=[0.13,0.13,0.13,0.15,0.15,0.50,0.50,0.60,0.60,0.70,0.70,0.83,0.83,0.98,0.98,0.08,0.08];
 const JC17=TYPEHUE.map((h,i)=>{const c=new THREE.Color();c.setHSL(h,0.92,i===0?0.85:(i%2===1?0.68:0.42));return c;});
-let pointsObj=null,bonesObj=null,trailsObj=null,rectObj=null,velObj=null;
+let pointsObj=null,bonesObj=null,trailsObj=null,rectObj=null,velObj=null,axGroup=null;
 function col(d){ const c=new THREE.Color(); c.setHSL((d[5]*0.61803)%1,0.7,0.6); return c; }
 const HALF=EW*S/2;    // ★DẪN XUẤT: đoạn vượt HALF = vắt seam → vẽ 2 mảnh qua 2 mép
 function wseg(P,C,xa,ya,za,xb,yb,zb,r,gc,b){
@@ -125,6 +138,67 @@ function wseg(P,C,xa,ya,za,xb,yb,zb,r,gc,b){
    P.push(xa,ya,za, xb-sh,yb,zb, xa+sh,ya,za, xb,yb,zb);
    C.push(r,gc,b,r,gc,b, r,gc,b,r,gc,b);
  } else {P.push(xa,ya,za, xb,yb,zb); C.push(r,gc,b, r,gc,b);}
+}
+function computeRawLinks(){   // TẦNG THÔ: mỗi khớp nối successor tốt nhất trong vài frame; link NHỚ pid 2 đầu → lần theo sợi. pid = di*17+j
+ const byFrame={}; for(let i=0;i<DET.length;i++){ const t=DET[i][4]; (byFrame[t]=byFrame[t]||[]).push(i); }
+ const times=Object.keys(byFrame).map(Number).sort((a,b)=>a-b), DT=1/6;
+ // near trên list [di,kp] → trả [dist, di]
+ const nearI=(kp,arr)=>{ let b=1e9,bd=-1; for(const [di,q] of arr){ if(q[2]<=0)continue; const dx=Math.abs(kp[0]-q[0]),wd=Math.min(dx,EW-dx),d=Math.hypot(wd,kp[1]-q[1]); if(d<b){b=d;bd=di;} } return [b,bd]; };
+ const cand=(tn,j)=>byFrame[tn].map(dj=>[dj,DET[dj][7][j]]);
+ // 1) ĐO bước tức thời (t→t+1) → lấy MỐC từ DATA: λ (giá nhảy 1 frame) = median, mốc-mờ = p90
+ const steps=[];
+ for(let i=0;i<times.length-1;i++){ const t=times[i],tn=times[i+1]; if(tn-t>DT*1.5) continue;
+   for(let j=0;j<17;j++){ const np=cand(tn,j);
+     for(const di of byFrame[t]){ const kp=DET[di][7][j]; if(kp[2]<=0)continue; const [d]=nearI(kp,np); if(d<1e9)steps.push(d); } } }
+ steps.sort((a,b)=>a-b); const P=p=>steps.length?steps[Math.min(steps.length-1,Math.floor(steps.length*p))]:30;
+ const LAMBDA=P(0.5), SCALE=Math.max(P(0.9),1); window.RAWSCALE={lambda:LAMBDA,scale:SCALE};   // ★mốc TỪ DATA, không bịa
+ // 2) mỗi điểm: successor cost NHỎ NHẤT trong ≤GMAX frame; cost = khoảng-cách + λ×(gap-1). GMAX chỉ là trần TÍNH.
+ const GMAX=window.RAWGMAX||6, links=[], adj={}, redge={};   // chân-trời TÌM (kéo được ở panel) — số duy nhất người chọn
+ const edge=(a,b)=>{ (adj[a]=adj[a]||new Set()).add(b); (adj[b]=adj[b]||new Set()).add(a); };   // đồ thị KỀ vô hướng để lần sợi 2 chiều
+ const anyJoint=(arr,j)=>{ for(const dj of arr){ if(DET[dj][7][j][2]>0) return true; } return false; };   // frame đó CÓ khớp loại j không (bất kỳ điểm)
+ for(let i=0;i<times.length;i++){ const t=times[i];
+   for(const di of byFrame[t]){ for(let j=0;j<17;j++){ const kp=DET[di][7][j]; if(kp[2]<=0)continue;
+     let bc=1e9,bdi=-1,bt=0,bd=0,bx=0,by=0;
+     for(let gp=1;gp<=GMAX && i+gp<times.length;gp++){ const tn=times[i+gp]; if(tn-t>DT*(gp+0.5))break;   // gap THẬT trong data → thôi
+       const [d,dj]=nearI(kp,cand(tn,j)); if(dj<0)continue;
+       const cost=d+LAMBDA*(gp-1); if(cost<bc){bc=cost;bdi=dj;bt=tn;bd=d;bx=DET[dj][7][j][0];by=DET[dj][7][j][1];} }
+     if(bdi>=0){ const pa=di*17+j, pb=bdi*17+j; links.push([kp[0],kp[1],t, bx,by,bt, j, bd, pa,pb]); edge(pa,pb); }
+     // ĐẦU/CUỐI theo CÓ-MẶT-THẬT (không theo greedy-pick): trước/sau trong tầm nhìn-xa có khớp cùng loại không
+     let pv=false;
+     for(let gp=1;gp<=GMAX && i-gp>=0;gp++){ const tp=times[i-gp]; if(t-tp>DT*(gp+0.5))break; if(anyJoint(byFrame[tp],j)){pv=true;break;} }
+     const isStart=!pv, isEnd=(bdi<0);   // trước KHÔNG có = vừa xuất hiện · sau KHÔNG có = biến mất
+     const code = (isStart&&isEnd)?3 : isStart?1 : isEnd?2 : 0;   // 1=ĐẦU 2=CUỐI 3=lẻ 0=giữa
+     if(code) redge[di*17+j]=code; } } }
+ window.RAWLINKS=links; window.RAWADJ=adj; window.RAWEDGE=redge;
+ // MẢNG = thành phần liên thông của đồ thị link (mỗi mảng = 1 "dề" của loại khớp đó, do luật nối-gần-nhất dán lại)
+ const cc={},ccsize={}; let ncc=0;
+ for(const k in adj){ const start=+k; if(cc[start]!==undefined)continue; const id=ncc++; const st=[start]; cc[start]=id; let sz=0;
+   while(st.length){ const p=st.pop(); sz++; const nb=adj[p]; if(nb)for(const q of nb) if(cc[q]===undefined){cc[q]=id;st.push(q);} }
+   ccsize[id]=sz; }
+ window.RAWCC=cc; window.RAWCCSIZE=ccsize; window.RAWCCN=ncc;
+ const byJ={}; for(const k in cc){ const j=(+k)%17; (byJ[j]=byJ[j]||new Set()).add(cc[+k]); }   // mỗi loại khớp có mấy mảng
+ window.RAWJMASS={}; for(let j=0;j<17;j++) window.RAWJMASS[j]=byJ[j]?byJ[j].size:0;
+}
+function massCurve(j){   // ĐẾM số MẢNG (lục địa) của loại khớp j ở TỪNG chân-trời 1..18 — trả lời "mấy lục địa cho mỗi chân-trời". Cache theo j (chỉ phụ thuộc data)
+ if(window.MASSCURVE&&window.MASSCURVE[j]!=null) return window.MASSCURVE[j];
+ if(!window.MASSCURVE) window.MASSCURVE={};
+ const byFrame={}; for(let i=0;i<DET.length;i++){ const t=DET[i][4]; (byFrame[t]=byFrame[t]||[]).push(i); }
+ const times=Object.keys(byFrame).map(Number).sort((a,b)=>a-b), DT=1/6;
+ const LAMBDA=(window.RAWSCALE&&window.RAWSCALE.lambda)||30;   // λ = median bước (đo từ data, không bịa)
+ const nearI=(kp,arr)=>{ let b=1e9,bd=-1; for(const di of arr){ const q=DET[di][7][j]; if(q[2]<=0)continue; const dx=Math.abs(kp[0]-q[0]),wd=Math.min(dx,EW-dx),d=Math.hypot(wd,kp[1]-q[1]); if(d<b){b=d;bd=di;} } return [b,bd]; };
+ const out=[];
+ for(let h=1;h<=18;h++){
+   const par={}; const find=x=>{let r=x;while(par[r]!==r)r=par[r];while(par[x]!==r){const n=par[x];par[x]=r;x=n;}return r;};
+   const uni=(a,b)=>{ if(par[a]===undefined)par[a]=a; if(par[b]===undefined)par[b]=b; const ra=find(a),rb=find(b); if(ra!==rb)par[ra]=rb; };
+   for(let i=0;i<times.length;i++){ const t=times[i];
+     for(const di of byFrame[t]){ const kp=DET[di][7][j]; if(kp[2]<=0)continue;
+       let bc=1e9,bdi=-1;
+       for(let gp=1;gp<=h && i+gp<times.length;gp++){ const tn=times[i+gp]; if(tn-t>DT*(gp+0.5))break;
+         const [d,dj]=nearI(kp,byFrame[tn]); if(dj<0)continue; const cost=d+LAMBDA*(gp-1); if(cost<bc){bc=cost;bdi=dj;} }
+       if(bdi>=0) uni(di*17+j, bdi*17+j); } }
+   const roots=new Set(); for(const k in par) roots.add(find(+k)); out.push(roots.size);
+ }
+ window.MASSCURVE[j]=out; return out;
 }
 function chainSet(tid){   // tid + toàn bộ tổ tiên (đi ngược PA) = đường sinh→lá; không PA (Kalman/greedy) → chỉ chính nó
  const s=new Set(); let id=tid, guard=0;
@@ -137,8 +211,26 @@ function build(){
  const confOn=g('confop').checked, liveOn=g('live').checked, speedOn=g('speed').checked, perrOn=g('perr').checked, sigOn=g('sig').checked;
  const hc=new THREE.Color();
  const topR=1-(+g('toppct').value/100); g('tpv').textContent=g('toppct').value;   // chỉ giữ track ở top-% chuỗi dài nhất
- const chain = selTid!=null ? chainSet(selTid) : null;   // cô lập = CẢ CHUỖI tổ tiên (đường thắng đầy đủ), bỏ qua bộ lọc độ-dài
- const keep=d=> chain ? chain.has(d[5]) : (TL[d[5]]>=minL&&((window.LENRANK||{})[d[5]]||0)>=topR);
+ const chain = (selTid!=null && !window.RAW) ? chainSet(selTid) : null;   // tracked: chuỗi tổ tiên · THÔ: KHÔNG lọc (click chỉ tô nổi, không giấu đám mây)
+ const keep=d=> window.RAW ? true : (chain ? chain.has(d[5]) : (TL[d[5]]>=minL&&((window.LENRANK||{})[d[5]]||0)>=topR));   // THÔ: giữ HẾT, mỗi det dài 1f
+ // THÔ: click 1 chấm → SỢI = thành phần liên thông của pid đó qua đồ thị link (2 chiều). window.RSET = tập pid của sợi
+ window.RSET=null; window.RSTART=null; window.REND=null; window.RBRANCH=null;
+ const seeds = window.RAW ? (window.SEEDS && window.SEEDS.length ? window.SEEDS : (selTid!=null?[selTid]:[])) : [];
+ if(window.RAW && seeds.length && window.RAWADJ){ const R=new Set(seeds), st=[...seeds];
+   while(st.length){ const p=st.pop(); const nb=window.RAWADJ[p]; if(nb) for(const q of nb) if(!R.has(q)){R.add(q);st.push(q);} }
+   window.RSET=R; let ts=1e9,te=-1e9; for(const pid of R){ const tt=DET[Math.floor(pid/17)][4]; if(tt<ts)ts=tt; if(tt>te)te=tt; }
+   window.RSTART=ts; window.REND=te;
+   const br=new Set(); for(const pid of R){ const nb=window.RAWADJ[pid]; if(nb&&nb.size>=3) br.add(pid); } window.RBRANCH=br;   // bậc≥3 = chỗ CHẺ/NHẬP (mập mờ); ≤2 = đi thẳng
+ }
+ const RSET=window.RSET, RBRANCH=window.RBRANCH;
+ const RAWJSET = window.RAW ? new Set([...document.querySelectorAll('.jf:checked')].map(c=>+c.value)) : new Set();   // rỗng = cả 17; nhiều = gộp loại
+ const jfActive = RAWJSET.size>0;
+ const CCON = window.RAW && g('cccolor') && g('cccolor').checked;   // tô màu theo MẢNG (thành phần liên thông)
+ const MNUM = window.RAW && g('massnum') && g('massnum').checked;   // số cặp đầu↔đít
+ const endpts=[];
+ const ccCol=new THREE.Color();
+ const ccColor=pid=>{ const id=window.RAWCC?window.RAWCC[pid]:undefined; if(id===undefined){ccCol.setHSL(0,0,0.55);return ccCol;}
+   ccCol.setHSL((id*0.61803)%1, 0.85, 0.55); return ccCol; };   // HUE = mảng nào; sáng/tươi CỐ ĐỊNH (độ sáng để dành cho conf YOLO)
  pointTid=[];   // dựng lại map chấm→track cho click
  const PX=k=>MX(k[0]), PY=k=>MY(k[1]);
  // Ô (box thô)
@@ -150,29 +242,46 @@ function build(){
  }
  geoR.setAttribute('position',new THREE.Float32BufferAttribute(RP,3)); geoR.setAttribute('color',new THREE.Float32BufferAttribute(RC,3));
  // CHẤM (vị trí) + cỡ theo σ · XƯƠNG · VẬN TỐC
- const KP=[],KC=[],KS=[],BP=[],BC=[],VP=[],VC=[];
- if(g('dots').checked||g('bones').checked||perrOn) for(const d of DET){
+ const KP=[],KC=[],KS=[],KSHP=[],KAL=[],BP=[],BC=[],VP=[],VC=[];
+ if(g('dots').checked||g('bones').checked||perrOn) for(let di=0;di<DET.length;di++){ const d=DET[di];
    if(!keep(d)) continue;
    const Z=d[4]*zs, dim=confOn?Math.max(0.03,d[6]):1;
    if(window.PTFMT){                                   // schema ĐIỂM: mỗi det = 1 khớp (d[7]=LOẠI khớp)
      if(d[6]<=0.05) continue; const jt=d[7], px=d[0], py=d[1];
      if(g('dots').checked){ let jr,jg,jb;
        if(speedOn&&d[8]!=null){ const sp=Math.min(Math.hypot(d[8],d[9])/20,1); hc.setHSL((1-sp)*0.62,0.95,0.55); jr=hc.r;jg=hc.g;jb=hc.b; }
-       else { const jc=JC17[jt]; jr=jc.r*dim;jg=jc.g*dim;jb=jc.b*dim; }
+       else { const jc=JC17[jt]; jr=jc.r;jg=jc.g;jb=jc.b; }
        KP.push(MX(px),MY(py),Z); KC.push(jr,jg,jb); pointTid.push(d[5]);
-       KS.push(sigOn&&d[10]!=null ? 3+Math.min(d[10],40)*0.55 : 4); }
+       KS.push(sigOn&&d[10]!=null ? 3+Math.min(d[10],40)*0.55 : 4); KSHP.push(0); KAL.push(dim); }
      if(perrOn&&d[11]!=null&&(d[11]||d[12])){ const dx=Math.abs(px-d[11]),wd=Math.min(dx,EW-dx);
        const err=Math.hypot(wd,py-d[12]), big=err>(d[10]||5);
        wseg(VP,VC, MX(d[11]),MY(d[12]),Z, MX(px),MY(py),Z, big?1:0.35, big?0.2:0.35, big?0.2:0.35); }
      continue;
    }
    const K=d[7];
-   for(let i=0;i<17;i++){ const kp=K[i]; if(kp[2]<=0.05) continue;
+   for(let i=0;i<17;i++){ const kp=K[i]; if(kp[2]<=(window.RAW?0:0.05)) continue;   // RAW: vẽ HẾT (conf>0), mờ theo conf
+     if(jfActive && !RAWJSET.has(i)) continue;   // THÔ lọc loại khớp (nhiều loại = gộp)
+     const pid=window.RAW?di*17+i:d[5];
+     const rdim=(RSET? (RSET.has(pid)?1:0.10) : 1);   // THÔ đang chọn sợi: chấm NGOÀI sợi mờ hẳn để sợi nổi
+     const deg = (window.RAW && window.RAWADJ) ? (window.RAWADJ[pid]?window.RAWADJ[pid].size:0) : -1;
+     // HÌNH = topology: ĐẦU/CUỐI/lẻ theo CÓ-MẶT-THẬT (RAWEDGE); ở GIỮA thì theo bậc: 0 tròn · 3 Y · 4 +
+     let shp=0, ksz=4;
+     if(window.RAW){
+       const ec = window.RAWEDGE ? window.RAWEDGE[pid] : 0;
+       if(ec===1){ shp=1; ksz=19; }                       // ĐẦU = vuông đặc TO (vừa xuất hiện)
+       else if(ec===2){ shp=2; ksz=20; }                  // CUỐI = vuông rỗng TO (biến mất)
+       else if(ec===3){ shp=5; ksz=11; }                  // lẻ = tròn nhấp nháy
+       else if(deg>=4){ shp=4; ksz=14; }                  // + chĩa-4+
+       else if(deg===3){ shp=3; ksz=14; }                 // Y chĩa-3
+       else { shp=0; ksz=4; }                             // tròn thẳng
+     } else ksz = sigOn&&kp[5]!=null ? 3+Math.min(kp[5],40)*0.55 : 4;
+     if(MNUM && (shp===1||shp===2)) endpts.push({x:PX(kp),y:PY(kp),z:Z, cc:(window.RAWCC?window.RAWCC[pid]:pid)});   // gom mép để đánh số cặp
      if(g('dots').checked){ let jr,jg,jb;
        if(speedOn&&kp[3]!=null){ const sp=Math.min(Math.hypot(kp[3],kp[4])/20,1); hc.setHSL((1-sp)*0.62,0.95,0.55); jr=hc.r;jg=hc.g;jb=hc.b; }
-       else { const jc=JC17[i]; jr=jc.r*dim;jg=jc.g*dim;jb=jc.b*dim; }
-       KP.push(PX(kp),PY(kp),Z); KC.push(jr,jg,jb); pointTid.push(d[5]);
-       KS.push(sigOn&&kp[5]!=null ? 3+Math.min(kp[5],40)*0.55 : 4); }
+       else if(CCON){ const c=ccColor(pid); jr=c.r;jg=c.g;jb=c.b; }   // màu theo MẢNG (tuỳ chọn)
+       else { const jc=JC17[i]; jr=jc.r;jg=jc.g;jb=jc.b; }            // MÀU = loại khớp (không nhồi topology)
+       KP.push(PX(kp),PY(kp),Z); KC.push(jr,jg,jb); pointTid.push(pid);   // độ MỜ để riêng cho alpha (conf), không nhân vào màu
+       KS.push(ksz); KSHP.push(window.RAW?shp:0); KAL.push((confOn?Math.max(0.05,dim):1)*rdim); }   // alpha = conf × (mờ khi chọn mảng khác)
      if(perrOn&&kp[6]!=null&&(kp[6]||kp[7])){ const dx=Math.abs(kp[0]-kp[6]),wd=Math.min(dx,EW-dx);
        const err=Math.hypot(wd,kp[1]-kp[7]), big=err>(kp[5]||5);   // ra ngoài vòng σ = bất ngờ
        wseg(VP,VC, MX(kp[6]),MY(kp[7]),Z, PX(kp),PY(kp),Z, big?1:0.35, big?0.2:0.35, big?0.2:0.35); }
@@ -182,7 +291,14 @@ function build(){
  }
  // SỢI khớp theo thời gian (màu bộ phận · hoặc màu-track khi highlight sống)
  const TP=[],TC=[];
- if(g('trails').checked){ const cc=new THREE.Color();
+ if(g('trails').checked&&window.RAW&&window.RAWLINKS){   // THÔ: web nối gần-nhất, mờ dần theo k/c (luôn hiện — click không giấu)
+   const SC=(window.RAWSCALE&&window.RAWSCALE.scale)||60;   // mốc mờ = p90 bước ĐO TỪ DATA
+   for(const L of window.RAWLINKS){ if(jfActive && !RAWJSET.has(L[6])) continue;   // THÔ lọc loại khớp (nhiều loại = gộp)
+     const inS = RSET&&(RSET.has(L[8])||RSET.has(L[9]));   // link thuộc SỢI đang chọn?
+     const g0=Math.max(0.14,1-L[7]/SC)*0.6, gg = RSET ? (inS?0.9:0.03) : g0;   // XÁM MỜ ĐỀU — sàn rõ hơn để thấy chỗ NHẬP/TOÈ (không mang màu)
+     wseg(TP,TC, MX(L[0]),MY(L[1]),L[2]*zs, MX(L[3]),MY(L[4]),L[5]*zs, gg,gg,gg); }
+ }
+ if(g('trails').checked&&!window.RAW){ const cc=new THREE.Color();
    const byT={}; for(const d of DET){ if(!keep(d)) continue; (byT[d[5]]=byT[d[5]]||[]).push(d); }
    for(const tid in byT){ const arr=byT[tid].sort((a,b)=>a[4]-b[4]);
      let tcol=null;
@@ -199,16 +315,49 @@ function build(){
          if(A[2]>0.05&&B[2]>0.05){ const dim=confOn?Math.max(0.03,Math.min(arr[i][6],arr[i+1][6])):1;
            wseg(TP,TC,PX(A),PY(A),arr[i][4]*zs, PX(B),PY(B),arr[i+1][4]*zs, jc.r*dim,jc.g*dim,jc.b*dim);}}}}
  }
+ // NHÃN SỐ cặp đầu↔đít: mỗi mảng 1 số, hiện ở CẢ vuông-đặc lẫn vuông-rỗng của nó → pair được
+ window.LBL=[];
+ if(MNUM){ const seq={}; let n=0; const CAP=300;
+   for(const e of endpts) if(seq[e.cc]===undefined) seq[e.cc]=++n;
+   for(const e of endpts){ if(window.LBL.length>=CAP) break; window.LBL.push([e.x,e.y,e.z, seq[e.cc]]); }
+   if(endpts.length>CAP) g('hud').textContent='số cặp: hiện '+CAP+'/'+endpts.length+' mép — kéo NHÌN XA lên cho gọn'; else g('hud').textContent=''; }
+ buildLbls();
  geoP.setAttribute('position',new THREE.Float32BufferAttribute(KP,3)); geoP.setAttribute('color',new THREE.Float32BufferAttribute(KC,3));
  geoP.setAttribute('sz',new THREE.Float32BufferAttribute(KS,1));
+ geoP.setAttribute('shp',new THREE.Float32BufferAttribute(KSHP,1)); geoP.setAttribute('al',new THREE.Float32BufferAttribute(KAL,1));
  geoP.computeBoundingSphere();   // ★ raycaster click dùng boundingSphere; đổi mode/dựng lại phải tính lại kẻo tia bị cắt sớm → 0 hit
+ if(pointsObj){ const m=pointsObj.material;   // NORMAL blending + alpha=conf → đọc HÌNH rõ (không haze cộng-dồn)
+   m.blending=THREE.NormalBlending; m.transparent=true; m.depthWrite=false; m.needsUpdate=true; }
+ if(axGroup){ axGroup.visible=g('axes').checked;   // trục Z DÀI ĐÚNG span giờ của data (không phải số cứng)
+   while(axGroup.children.length){ const o=axGroup.children[0]; o.geometry.dispose(); axGroup.remove(o); }
+   if(axGroup.visible){ const zmax=(window.MAXT||0)*zs;
+     const mk=(a,b,c)=>{const gg=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a),new THREE.Vector3(...b)]); axGroup.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:c,transparent:true,opacity:0.5})));};
+     mk([-100,-50,0],[100,-50,0],0xff6b6b); mk([-100,-50,0],[-100,50,0],0x6bff6b); mk([-100,-50,0],[-100,-50,zmax],0x6b9bff); }
+ }
  geoB.setAttribute('position',new THREE.Float32BufferAttribute(BP,3)); geoB.setAttribute('color',new THREE.Float32BufferAttribute(BC,3));
  geoT.setAttribute('position',new THREE.Float32BufferAttribute(TP,3)); geoT.setAttribute('color',new THREE.Float32BufferAttribute(TC,3));
  geoV.setAttribute('position',new THREE.Float32BufferAttribute(VP,3)); geoV.setAttribute('color',new THREE.Float32BufferAttribute(VC,3));
  rectObj.material.opacity=+g('op').value/100;
  updateVideo();
- g('stat').innerHTML=(selTid!=null?`<b style="color:#ffd24d">▶ CHUỖI #${selTid}</b> (đường ${(window.FULLLEN||{})[selTid]||TL[selTid]}f · ${chain?chain.size:1} đoạn nhánh) · <span id=clr style="cursor:pointer;text-decoration:underline">xem tất cả</span><br>`:`<span style=color:#8b94a8>click 1 chấm = cô lập CẢ CHUỖI (nhánh + tổ tiên)</span><br>`)+`${Object.keys(TL).filter(k=>TL[k]>=minL).length} track (≥${minL}f)`;
- if(selTid!=null){const c=g('clr'); if(c)c.onclick=()=>{selTid=null;build();};}
+ const JN=['mũi','mắt-T','mắt-P','tai-T','tai-P','vai-T','vai-P','cùi-T','cùi-P','cổtay-T','cổtay-P','hông-T','hông-P','gối-T','gối-P','cổchân-T','cổchân-P'];
+ const selMsg = selTid==null
+   ? `<span style=color:#8b94a8>click 1 chấm = ${window.RAW?'lần SỢI (shift-click: THÊM khớp)':'cô lập CẢ CHUỖI'}</span>`
+   : (window.RAW?(()=>{ const jts=[...new Set(seeds.map(p=>p%17))]; return `<b style="color:#ffd24d">▶ ${jts.length} khớp: ${jts.map(j=>JN[j]).join(', ')}</b> · ${RSET?RSET.size:1} chấm · <b style=color:#fff>${RBRANCH?RBRANCH.size:0}</b> chỗ chẻ · mép ${(window.RSTART||0).toFixed(1)}→${(window.REND||0).toFixed(1)}s`; })()
+                :`<b style="color:#ffd24d">▶ CHUỖI #${selTid}</b> (đường ${(window.FULLLEN||{})[selTid]||TL[selTid]}f · ${chain?chain.size:1} đoạn)`)
+       +` · <span id=clr style="cursor:pointer;text-decoration:underline">xem tất cả</span>`;
+ const gm=window.RAWGMAX||6;
+ const line2 = window.RAW
+   ? (jfActive ? `khớp ${[...RAWJSET].map(j=>`<b style=color:#ffd24d>${JN[j]}</b>:${(window.RAWJMASS||{})[j]||0}`).join(' · ')} mảng · nhìn xa ${gm}f`
+              : `${DET.length} detection thô · <b>${window.RAWCCN||0}</b> mảng (cả 17 loại) · nhìn xa ${gm}f`)
+   : `${Object.keys(TL).filter(k=>TL[k]>=minL).length} track (≥${minL}f)`;
+ let curveStr='';
+ if(window.RAW){ const jj = RAWJSET.size===1 ? [...RAWJSET][0] : (selTid!=null?selTid%17:-1);   // đường cong chỉ khi 1 loại (tick 1 hoặc click 1 mảng)
+   if(jj>=0){ const cur=massCurve(jj), h=gm;
+     curveStr='<br><span style=color:#8b94a8>lục địa '+JN[jj]+' /nhìn xa:</span> '+cur.map((n,ix)=>{const f=ix+1; return f===h?`<b style=color:#ffd24d>${f}f→${n}</b>`:`<span style=color:#9fb0c8>${f}f→${n}</span>`;}).join('  '); } }
+ const lockHint = (window.RAW && g('vedge') && g('vedge').checked && window.RSTART==null)
+   ? `<br><span style=color:#ff9a3c>⚠ khoá giây: CHƯA chọn mảng → click 1 mảng thì mới có [đầu,cuối] để khoá (giờ đang mở full)</span>` : '';
+ g('stat').innerHTML=selMsg+`<br>`+line2+curveStr+lockHint;
+ if(selTid!=null){const c=g('clr'); if(c)c.onclick=()=>{selTid=null;window.SEEDS=[];build();};}
 }
 function init(){
  scene=new THREE.Scene(); scene.background=new THREE.Color(0x07090f);
@@ -231,19 +380,43 @@ function init(){
      const sx=(v.x*0.5+0.5)*r.width, sy=(-v.y*0.5+0.5)*r.height, dd=(sx-mx)*(sx-mx)+(sy-my)*(sy-my);
      if(dd<best){best=dd; bi=i;}
    }
-   selTid = bi>=0 ? pointTid[bi] : null; build();
+   const hit = bi>=0 ? pointTid[bi] : null;
+   const addOn = e.shiftKey || (g('addmode')&&g('addmode').checked);   // shift HOẶC nút "gộp khớp" → cộng dồn (né kẹt shift+pan)
+   if(window.RAW){   // THÔ: gộp = THÊM khớp (2 vai, 2 vai+2 chân…); thường = chọn lại
+     window.SEEDS = window.SEEDS||[];
+     if(hit==null){ if(!addOn){ window.SEEDS=[]; selTid=null; } }
+     else if(addOn){ const ix=window.SEEDS.indexOf(hit); if(ix>=0)window.SEEDS.splice(ix,1); else window.SEEDS.push(hit); selTid=window.SEEDS.length?window.SEEDS[window.SEEDS.length-1]:null; }
+     else { window.SEEDS=[hit]; selTid=hit; }
+   } else selTid=hit;
+   build();
  });
- const ax=(a,b,c)=>{const gg=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a),new THREE.Vector3(...b)]);
-   scene.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:c})));};
- ax([-100,-50,0],[100,-50,0],0xff6b6b); ax([-100,-50,0],[-100,50,0],0x6bff6b); ax([-100,-50,0],[-100,-50,3600],0x6b9bff);
+ axGroup=new THREE.Group(); axGroup.visible=false; scene.add(axGroup);   // trục XYZ: ẩn mặc định (dễ lộn với data); dựng trong build() theo span giờ
  rectObj=new THREE.LineSegments(geoR,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:0.22}));
  bonesObj=new THREE.LineSegments(geoB,new THREE.LineBasicMaterial({vertexColors:true}));
  trailsObj=new THREE.LineSegments(geoT,new THREE.LineBasicMaterial({vertexColors:true}));
  velObj=new THREE.LineSegments(geoV,new THREE.LineBasicMaterial({vertexColors:true}));
  // CHẤM: shader cho cỡ per-điểm (σ)
- const pmat=new THREE.ShaderMaterial({vertexColors:true,
-   vertexShader:'attribute float sz; varying vec3 vc; void main(){ vc=color; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_PointSize=sz; }',
-   fragmentShader:'varying vec3 vc; void main(){ vec2 c=gl_PointCoord-0.5; if(dot(c,c)>0.25) discard; gl_FragColor=vec4(vc,1.0); }'});
+ const pmat=new THREE.ShaderMaterial({vertexColors:true, transparent:true, depthWrite:false, uniforms:{uTime:{value:0}},
+   vertexShader:'uniform float uTime; attribute float sz; attribute float shp; attribute float al; varying vec3 vc; varying float vs; varying float va; void main(){ vc=color; vs=shp; va=al; float s=sz; bool pls=(shp>0.5&&shp<2.5)||shp>4.5; if(pls) s*=1.10+0.30*sin(uTime*4.0); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_PointSize=s; }',
+   fragmentShader:[
+     'uniform float uTime; varying vec3 vc; varying float vs; varying float va;',
+     'void main(){ vec2 c=gl_PointCoord-0.5; float keep=0.0;',
+     ' if(vs<0.5){ if(dot(c,c)<=0.22) keep=1.0; }',                                            // 0 = tròn đặc (THẲNG)
+     ' else if(vs<1.5){ if(max(abs(c.x),abs(c.y))<=0.42) keep=1.0; }',                         // 1 = vuông ĐẶC (ĐẦU)
+     ' else if(vs<2.5){ float mm=max(abs(c.x),abs(c.y)); if(mm<=0.46 && mm>=0.28) keep=1.0; }',// 2 = vuông RỖNG (CUỐI)
+     ' else if(vs<3.5){ float w=0.12;',                                                        // 3 = Y (chĩa-3): 3 nhánh 120°
+     '   float t0=clamp(dot(c,vec2(0.0,-1.0)),0.0,0.48);',
+     '   float t1=clamp(dot(c,vec2(0.866,0.5)),0.0,0.48);',
+     '   float t2=clamp(dot(c,vec2(-0.866,0.5)),0.0,0.48);',
+     '   if(length(c-vec2(0.0,-1.0)*t0)<w || length(c-vec2(0.866,0.5)*t1)<w || length(c-vec2(-0.866,0.5)*t2)<w) keep=1.0; }',
+     ' else if(vs<4.5){ if((abs(c.x)<0.12&&abs(c.y)<0.46)||(abs(c.y)<0.12&&abs(c.x)<0.46)) keep=1.0; }',  // 4 = + (chĩa-4+)
+     ' else { if(dot(c,c)<=0.22) keep=1.0; }',                                                 // 5 = tròn (LẺ)
+     ' if(keep<0.5) discard;',
+     ' bool pls = (vs>0.5 && vs<2.5) || vs>4.5;',                                              // ĐẦU/CUỐI/lẻ = nhấp nháy + glow mạnh
+     ' float a=va; vec3 col=vc;',
+     ' if(pls){ float p=0.55+0.45*sin(uTime*4.0); a=min(1.0, 0.55+0.45*p); col=vc*(1.3+1.6*p)+vec3(0.15*p); }',
+     ' gl_FragColor=vec4(col, a); }'
+   ].join('\n')});
  pointsObj=new THREE.Points(geoP,pmat);
  [rectObj,bonesObj,trailsObj,velObj,pointsObj].forEach(o=>o.frustumCulled=false);
  scene.add(rectObj); scene.add(bonesObj); scene.add(trailsObj); scene.add(velObj); scene.add(pointsObj);
@@ -251,11 +424,19 @@ function init(){
  vidPlane=new THREE.Mesh(new THREE.PlaneGeometry(EW*S,EH*S),
    new THREE.MeshBasicMaterial({transparent:true,opacity:0.85,depthWrite:false,side:THREE.DoubleSide,color:0xffffff}));
  vidPlane.frustumCulled=false; vidPlane.visible=false; scene.add(vidPlane);
- const VIDCTL=new Set(['vid','vt','vop']);
+ const VIDCTL=new Set(['vid','vt','vop']);   // vedge KHÔNG ở đây → toggle rebuild (cập nhật gợi ý + khoá dải)
  for(const e of document.querySelectorAll('input,select')){
    if(VIDCTL.has(e.id)) e.addEventListener('input',updateVideo); else e.addEventListener('input',build);
  }
  for(const e of document.querySelectorAll('input,select')) e.addEventListener('change',()=>e.blur());
+ // tick loại khớp = XOÁ selection cũ (khỏi bị mờ 10% do mảng-đang-chọn khác loại → tưởng "không vẽ")
+ for(const e of document.querySelectorAll('.jf')) e.addEventListener('input',()=>{ window.SEEDS=[]; selTid=null; build(); });
+ // chân-trời: kéo cập nhật nhãn; THẢ ra mới NỐI LẠI (recompute nặng) → mảng vỡ/dính đổi theo
+ window.RAWGMAX=+g('gmax').value; g('gmv').textContent=g('gmax').value;
+ g('gmax').addEventListener('input',()=>{ g('gmv').textContent=g('gmax').value; });
+ g('gmax').addEventListener('change',()=>{ window.RAWGMAX=+g('gmax').value; if(!window.RAW)return;
+   g('hud').textContent='đang nối lại (nhìn xa '+window.RAWGMAX+'f)…';   // GIỮ selTid → mảng đang chọn phình/vỡ theo nhìn xa
+   setTimeout(()=>{ computeRawLinks(); build(); g('hud').textContent=''; },10); });
  g('vgo').onclick=()=>{const zs=+g('zs').value/10,z=(+g('vt').value)*zs; controls.target.set(0,0,z); camera.position.set(0,0,z+130); controls.update();};
  g('vfit').onclick=()=>frameView('fit'); g('vtop').onclick=()=>frameView('top');
  g('vside').onclick=()=>frameView('side'); g('vtime').onclick=()=>frameView('time');
@@ -267,7 +448,7 @@ function init(){
    else if(k==='a') d=[-s,0,0]; else if(k==='d') d=[s,0,0];
    else if(k==='r') d=[0,s,0]; else if(k==='f') d=[0,-s,0];
    else if(k===']'){nav.step*=1.5;g('stepv').textContent=nav.step.toFixed(0);return;} else if(k==='['){nav.step=Math.max(2,nav.step/1.5);g('stepv').textContent=nav.step.toFixed(0);return;}
-   else if(k==='.'||k===','){const dt=(k==='.'?1:-1)/6; g('vt').value=Math.max(0,Math.min(+g('vt').max,+g('vt').value+dt)); if(!g('vid').checked)g('vid').checked=true; updateVideo(); e.preventDefault(); return;}
+   else if(k==='.'||k===','){const dt=(k==='.'?1:-1)/6; g('vt').value=Math.max(+g('vt').min,Math.min(+g('vt').max,+g('vt').value+dt)); if(!g('vid').checked&&!g('vedge').checked)g('vid').checked=true; updateVideo(); e.preventDefault(); return;}
    if(d){const v=new THREE.Vector3(...d);camera.position.add(v);controls.target.add(v);controls.update();e.preventDefault();}
  });
  addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
@@ -281,16 +462,36 @@ function frameView(mode){
  else if(mode==='time') camera.position.set(60,40,cz+zmax*0.9);
  controls.update();
 }
-function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera);}
+function buildLbls(){ const box=g('lbls'); if(!box)return; box.innerHTML=''; window.LBLEL=[];
+ if(!window.LBL) return;
+ for(const L of window.LBL){ const s=document.createElement('span');
+   s.textContent=L[3]; s.style.cssText='position:absolute;color:#fff;font:900 13px/1 monospace;transform:translate(-50%,-50%);text-shadow:0 0 2px #000,0 0 2px #000,1px 1px 0 #000,-1px -1px 0 #000';
+   box.appendChild(s); window.LBLEL.push(s); } }
+function updateLbls(){ if(!window.LBL||!window.LBLEL||!camera||!window.LBL.length) return;
+ const w=renderer.domElement.clientWidth, h=renderer.domElement.clientHeight, v=new THREE.Vector3();
+ for(let i=0;i<window.LBL.length;i++){ const L=window.LBL[i], el=window.LBLEL[i]; if(!el)continue;
+   v.set(L[0],L[1],L[2]).project(camera);
+   if(v.z<-1||v.z>1){ el.style.display='none'; continue; }
+   el.style.display=''; el.style.left=((v.x*0.5+0.5)*w)+'px'; el.style.top=((-v.y*0.5+0.5)*h)+'px'; } }
+function animate(){requestAnimationFrame(animate); if(pointsObj&&pointsObj.material.uniforms)pointsObj.material.uniforms.uTime.value=performance.now()/1000; controls.update(); updateLbls(); renderer.render(scene,camera);}
 let inited=false;
-function updateSrcUI(){   // mode greedy không có vận tốc/σ (k chỉ [x,y,c]) → grey 2 cái đó
- const kal=window.PTFMT || (DET.length&&DET[0][7]&&DET[0][7][0]&&DET[0][7][0].length>=6);   // có vx,vy,σ,ppx,ppy? (Kalman & joint-độc-lập có; greedy không)
- for(const id of ['speed','perr','sig']){const el=g(id);el.disabled=!kal;if(!kal)el.checked=false;const lab=el.closest('label');if(lab)lab.style.opacity=kal?1:0.4;}
- g('ghd').style.opacity=kal?1:0.4;
+function updateSrcUI(){   // ẨN/HIỆN control theo NĂNG LỰC mode (ẩn hẳn, không làm mờ nửa vời)
+ const raw=!!window.RAW, ptf=!!window.PTFMT;
+ const kin = !raw && (ptf || (DET.length&&DET[0][7]&&DET[0][7][0]&&DET[0][7][0].length>=6));   // động học: Kalman | joint độc lập
+ const skel= !raw && !ptf && DET.length>0 && Array.isArray(DET[0][7]);                          // xương: Kalman | greedy (17 khớp/track)
+ const box = !ptf;                                                                              // box thật: THÔ | Kalman | greedy (joint suy biến)
+ const tracked = !raw;                                                                          // có track: mọi mode trừ THÔ
+ const sh=(id,on)=>{const e=g(id); if(e)e.style.display=on?'':'none';};
+ sh('secFilter',tracked); sh('secKin',kin); sh('secRaw',raw);   // khối THÔ chỉ hiện ở mode detection thô
+ sh('lblBones',skel); sh('lblLive',tracked); sh('lblRects',box); sh('lblOp',box);
+ g('secMode').style.display=(skel||tracked||box)?'':'none';
+ for(const id of ['bones','live','rects']){const e=g(id),lab=e&&e.closest('label'); if(lab&&lab.style.display==='none')e.checked=false;}
 }
 function loadSrc(file){
  g('hud').textContent='đang tải '+file+'…';
  fetch(file).then(r=>r.json()).then(d=>{DET=d.dets;TL=d.tl;
+  window.RAW = !!d.raw;   // tầng 0: detection thô chưa track
+  window.RAWLINKS=null; window.MASSCURVE=null; selTid=null; window.SEEDS=[]; if(window.RAW){ g('hud').textContent='đang nối chuỗi thô…'; computeRawLinks(); }   // nối gần-nhất frame kế để SỢI hiện được
   window.PTFMT = DET.length>0 && typeof DET[0][7]==='number';   // schema ĐIỂM (joint=loại-khớp): d[7] là SỐ loại, không phải mảng k[]
   window.PA = d.pa || {};   // gia phả: PA[id]=id CHA (-1=gốc). Không có (Kalman/greedy) → chuỗi = chính nó
   window.MAXT=DET.reduce((m,x)=>Math.max(m,x[4]),0); g('vt').max=window.MAXT.toFixed(2);
